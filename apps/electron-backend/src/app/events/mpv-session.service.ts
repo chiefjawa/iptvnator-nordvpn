@@ -1,3 +1,4 @@
+import { protectedVpnSession } from '../services/linux-vpn-session';
 import { spawn } from 'child_process';
 import {
     ExternalPlayerSession,
@@ -160,13 +161,17 @@ async function launchMpvPlayer(
 
     try {
         const isFlatpak = isRunningInFlatpak();
+        if (isFlatpak && protectedVpnSession()) {
+            throw new Error('Use the built-in player while app VPN is on.');
+        }
         const mpvLaunchContext = resolveExternalPlayerLaunchContext(
             'mpv',
             getMpvPath({ isFlatpak }),
             { isFlatpak }
         );
         const customMpvArguments = store.get(MPV_PLAYER_ARGUMENTS, '');
-        const requestedReuseInstance = store.get(MPV_REUSE_INSTANCE, false);
+        const requestedReuseInstance =
+            !protectedVpnSession() && store.get(MPV_REUSE_INSTANCE, false);
         const reuseInstance = shouldReuseMpvInstance(
             requestedReuseInstance,
             isFlatpak

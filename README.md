@@ -1,3 +1,6 @@
+> **Personal NordVPN fork:** Linux app-only VPN controls are added under Settings > General.
+> This is an unofficial fork of IPTVnator. See [setup, behavior and validation limits](docs/architecture/linux-app-vpn.md).
+
 # IPTVnator - IPTV Player Application
 
 <p align="center">

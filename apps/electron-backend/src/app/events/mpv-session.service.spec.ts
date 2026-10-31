@@ -1,3 +1,7 @@
+jest.mock('../services/linux-vpn-session', () => ({
+    protectedVpnSession: jest.fn(() => false),
+}));
+import { protectedVpnSession } from '../services/linux-vpn-session';
 jest.mock('electron', () => ({
     ipcMain: {
         handle: jest.fn(),
@@ -1214,3 +1218,43 @@ describe('external player shutdown on app quit', () => {
         proc.emit('exit', 0);
     });
 });
+
+(process.platform === 'linux' ? describe : describe.skip)(
+    'protected external playback',
+    () => {
+        it.each(['mpv', 'vlc'] as const)(
+            'starts a new %s inside the protected process rather than reusing host IPC',
+            async (player) => {
+                jest.clearAllMocks();
+                jest.mocked(protectedVpnSession).mockReturnValue(true);
+                const proc = createMockChildProcess();
+                jest.mocked(spawn).mockReturnValue(proc);
+                mockStoreValues({
+                    [MPV_PLAYER_PATH]: '/usr/bin/mpv',
+                    [VLC_PLAYER_PATH]: '/usr/bin/vlc',
+                    [MPV_REUSE_INSTANCE]: true,
+                    [VLC_REUSE_INSTANCE]: true,
+                });
+                try {
+                    const opening = (
+                        player === 'mpv' ? openMpvPlayer : openVlcPlayer
+                    )({
+                        title: 'VPN sample',
+                        url: 'https://example.com/test.m3u8',
+                    });
+                    await waitForSpawnCallCount(1);
+                    proc.emit('spawn');
+                    await opening;
+                    expect(spawn).toHaveBeenCalledTimes(1);
+                    expect(createConnection).not.toHaveBeenCalled();
+                    const args = jest.mocked(spawn).mock.calls[0][1];
+                    if (player === 'vlc')
+                        expect(args).toContain('--no-one-instance');
+                    proc.emit('exit', 0);
+                } finally {
+                    jest.mocked(protectedVpnSession).mockReturnValue(false);
+                }
+            }
+        );
+    }
+);

@@ -1,3 +1,4 @@
+import { protectedVpnSession } from '../services/linux-vpn-session';
 import { spawn } from 'child_process';
 import { AddressInfo, createServer } from 'net';
 import {
@@ -187,13 +188,17 @@ export async function openVlcPlayer({
 
     try {
         const isFlatpak = isRunningInFlatpak();
+        if (isFlatpak && protectedVpnSession()) {
+            throw new Error('Use the built-in player while app VPN is on.');
+        }
         const vlcLaunchContext = resolveExternalPlayerLaunchContext(
             'vlc',
             getVlcPath({ isFlatpak }),
             { isFlatpak }
         );
         const customVlcArguments = store.get(VLC_PLAYER_ARGUMENTS, '');
-        const requestedReuseInstance = store.get(VLC_REUSE_INSTANCE, false);
+        const requestedReuseInstance =
+            !protectedVpnSession() && store.get(VLC_REUSE_INSTANCE, false);
         const reuseInstance = shouldReuseVlcInstance(
             requestedReuseInstance,
             isFlatpak
@@ -378,7 +383,9 @@ export async function openVlcPlayer({
                     vlcLaunchContext,
                     buildPlayerArgsWithCustomArguments(
                         customVlcArguments,
-                        playerArgs
+                        protectedVpnSession()
+                            ? [...playerArgs, '--no-one-instance']
+                            : playerArgs
                     )
                 );
                 // Reuse ownership exists only when an RC port was allocated.

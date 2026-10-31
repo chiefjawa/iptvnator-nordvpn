@@ -770,6 +770,15 @@ export interface ElectronBridgeApi {
     onPlaylistRefreshEvent?: (
         callback: (data: PlaylistRefreshEvent) => void
     ) => () => void;
+    getLinuxVpnStatus?: () => Promise<
+        import('./linux-vpn.interface').LinuxVpnStatus
+    >;
+    configureLinuxVpn?: (
+        token: string
+    ) => Promise<import('./linux-vpn.interface').LinuxVpnStatus>;
+    changeLinuxVpn?: (
+        request: import('./linux-vpn.interface').LinuxVpnConnectionRequest
+    ) => Promise<import('./linux-vpn.interface').LinuxVpnStatus>;
     getAppVersion: () => Promise<string>;
     platform: string;
     getAppUpdateStatus: () => Promise<ElectronBridgeAppUpdateStatus>;

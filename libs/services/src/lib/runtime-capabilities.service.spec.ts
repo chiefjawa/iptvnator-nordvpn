@@ -10,6 +10,23 @@ describe('RuntimeCapabilitiesService', () => {
         testWindow.electron = originalElectron;
     });
 
+    it('offers app VPN only on Linux with the complete VPN bridge', () => {
+        const service = new RuntimeCapabilitiesService();
+        const methods = {
+            getLinuxVpnStatus: jest.fn(),
+            configureLinuxVpn: jest.fn(),
+            changeLinuxVpn: jest.fn(),
+        };
+        testWindow.electron = undefined;
+        expect(service.supportsLinuxVpn).toBe(false);
+        testWindow.electron = { platform: 'darwin', ...methods };
+        expect(service.supportsLinuxVpn).toBe(false);
+        testWindow.electron = { platform: 'linux', ...methods };
+        expect(service.supportsLinuxVpn).toBe(true);
+        delete testWindow.electron['changeLinuxVpn'];
+        expect(service.supportsLinuxVpn).toBe(false);
+    });
+
     it('offers the portal cooldown setting only with both desktop bridge methods', () => {
         const service = new RuntimeCapabilitiesService();
         testWindow.electron = { updateSettings: jest.fn() };

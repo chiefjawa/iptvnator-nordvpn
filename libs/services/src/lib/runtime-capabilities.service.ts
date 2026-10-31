@@ -40,6 +40,15 @@ export class RuntimeCapabilitiesService {
         return typeof platform === 'string' ? platform : undefined;
     }
 
+    get supportsLinuxVpn(): boolean {
+        return (
+            this.isLinux &&
+            ['getLinuxVpnStatus', 'configureLinuxVpn', 'changeLinuxVpn'].every(
+                (name) => this.hasElectronMethod(name)
+            )
+        );
+    }
+
     get isMacOS(): boolean {
         return this.platform === 'darwin';
     }

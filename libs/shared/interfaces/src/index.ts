@@ -128,3 +128,5 @@ export type {
     ContentCertification,
     AgeRatingDisplay,
 } from './lib/content-certification';
+
+export * from './lib/linux-vpn.interface';

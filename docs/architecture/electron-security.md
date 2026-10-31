@@ -330,3 +330,11 @@ Renderer IPC payloads are not filesystem authorization.
 - Downloads do not overwrite an existing destination file.
 - Reveal and playback handlers accept only file paths recorded in IPTVnator's
   downloads database.
+
+## Linux app VPN in the personal fork
+
+The optional NordVPN integration gates application startup before provider
+traffic and verifies the player's kernel network namespace. Its typed IPC accepts
+an account token only for one-time helper setup; it never persists or logs that
+token. See [Linux app VPN](linux-app-vpn.md) for helper trust, fail-closed startup,
+external-player restrictions and the live network acceptance checks.

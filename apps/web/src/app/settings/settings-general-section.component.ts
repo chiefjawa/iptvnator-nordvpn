@@ -1,3 +1,4 @@
+import { SettingsVpnSectionComponent } from './settings-vpn-section.component';
 import { CommonModule } from '@angular/common';
 import {
     Component,
@@ -30,6 +31,7 @@ import { provideFormFieldDefaults } from '@iptvnator/ui/components/form-field-de
     selector: 'app-settings-general-section',
     providers: [provideFormFieldDefaults()],
     imports: [
+        SettingsVpnSectionComponent,
         RadioGroupDirective,
         RadioOptionDirective,
         CommonModule,

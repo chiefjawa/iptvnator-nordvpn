@@ -1,3 +1,5 @@
+import { bootstrapLinuxVpn } from './app/services/linux-vpn-startup';
+import { registerLinuxVpnEvents } from './app/events/linux-vpn.events';
 import { installApplicationMenu } from './app/services/application-menu';
 // Select persistence before eager imports (notably electron-conf) cache userData.
 import './app/services/electron-profile-bootstrap';
@@ -129,6 +131,7 @@ export default class Main {
         );
         App.onMainWindowCreated(installApplicationMenu);
         registerStaticHeaderShims();
+        registerLinuxVpnEvents();
         WindowEvents.bootstrapWindowEvents();
         PlaylistOpenEvents.bootstrapPlaylistOpenEvents();
 
@@ -197,72 +200,74 @@ export default class Main {
     }
 }
 
-runEmbeddedMpvRuntimeDiagnosticOrContinue(process.argv, () => {
-    // macOS never puts the opened file in argv — Launch Services delivers it
-    // through `open-file`, which can fire before `whenReady`. Registering the
-    // listener here (and calling preventDefault, or Electron logs a warning
-    // and treats the event as unhandled) is the only way to catch a launch by
-    // double-clicking a playlist in Finder.
-    app.on('open-file', (event, filePath) => {
-        event.preventDefault();
-        playlistOpenRequests.enqueue(createPlaylistOpenRequest(filePath));
-    });
+bootstrapLinuxVpn(() => {
+    runEmbeddedMpvRuntimeDiagnosticOrContinue(process.argv, () => {
+        // macOS never puts the opened file in argv — Launch Services delivers it
+        // through `open-file`, which can fire before `whenReady`. Registering the
+        // listener here (and calling preventDefault, or Electron logs a warning
+        // and treats the event as unhandled) is the only way to catch a launch by
+        // double-clicking a playlist in Finder.
+        app.on('open-file', (event, filePath) => {
+            event.preventDefault();
+            playlistOpenRequests.enqueue(createPlaylistOpenRequest(filePath));
+        });
 
-    // Windows/Linux file associations and plain `iptvnator playlist.m3u`
-    // launches arrive as arguments instead — one per file, since selecting
-    // several playlists at once is a single launch. The renderer drains the
-    // queue once it is ready.
-    playlistOpenRequests.enqueueAll(
-        extractPlaylistOpenRequestsFromArgv(process.argv)
-    );
+        // Windows/Linux file associations and plain `iptvnator playlist.m3u`
+        // launches arrive as arguments instead — one per file, since selecting
+        // several playlists at once is a single launch. The renderer drains the
+        // queue once it is ready.
+        playlistOpenRequests.enqueueAll(
+            extractPlaylistOpenRequestsFromArgv(process.argv)
+        );
 
-    // handle setup events as quickly as possible
-    Main.initialize();
+        // handle setup events as quickly as possible
+        Main.initialize();
 
-    // A second instance sharing this userData directory cannot take the
-    // Chromium storage lock, so its renderer silently loses every settings
-    // write. Focus the window that already owns the profile instead — or
-    // re-create it, since on macOS the process outlives its last window.
-    if (
-        !acquireSingleInstanceLock(
-            app,
-            () => App.mainWindow,
-            () => App.ensureMainWindow(),
-            {
-                // A second launch is also how the OS says "open this playlist
-                // in the app you already have running". Its argv is the only
-                // carrier for that, and it is relative to *its* cwd.
-                onSecondInstance: (argv, workingDirectory) => {
-                    playlistOpenRequests.enqueueAll(
-                        extractPlaylistOpenRequestsFromArgv(
-                            argv,
-                            workingDirectory
-                        )
-                    );
-                },
-            }
-        )
-    ) {
-        return;
-    }
+        // A second instance sharing this userData directory cannot take the
+        // Chromium storage lock, so its renderer silently loses every settings
+        // write. Focus the window that already owns the profile instead — or
+        // re-create it, since on macOS the process outlives its last window.
+        if (
+            !acquireSingleInstanceLock(
+                app,
+                () => App.mainWindow,
+                () => App.ensureMainWindow(),
+                {
+                    // A second launch is also how the OS says "open this playlist
+                    // in the app you already have running". Its argv is the only
+                    // carrier for that, and it is relative to *its* cwd.
+                    onSecondInstance: (argv, workingDirectory) => {
+                        playlistOpenRequests.enqueueAll(
+                            extractPlaylistOpenRequestsFromArgv(
+                                argv,
+                                workingDirectory
+                            )
+                        );
+                    },
+                }
+            )
+        ) {
+            return;
+        }
 
-    // bootstrap app
-    Main.bootstrapApp();
+        // bootstrap app
+        Main.bootstrapApp();
 
-    // Bootstrap app events after Electron app is ready
-    app.whenReady().then(async () => {
-        traceStartupPhase('app.whenReady');
-        await Main.bootstrapAppEvents();
-    });
+        // Bootstrap app events after Electron app is ready
+        app.whenReady().then(async () => {
+            traceStartupPhase('app.whenReady');
+            await Main.bootstrapAppEvents();
+        });
 
-    // 'will-quit', not 'before-quit': the unsaved-settings close guard can
-    // cancel a quit mid-flight by preventing the window close, and
-    // 'before-quit' has already fired by then — tearing sessions and the DB
-    // worker down there would leave a cancelled quit with the app open but
-    // playback and database work destroyed. 'will-quit' only fires once
-    // every window close was allowed through.
-    app.on('will-quit', () => {
-        // Nothing to tear down when the deferred group never loaded.
-        deferredEvents?.module?.shutdownDeferredServices();
+        // 'will-quit', not 'before-quit': the unsaved-settings close guard can
+        // cancel a quit mid-flight by preventing the window close, and
+        // 'before-quit' has already fired by then — tearing sessions and the DB
+        // worker down there would leave a cancelled quit with the app open but
+        // playback and database work destroyed. 'will-quit' only fires once
+        // every window close was allowed through.
+        app.on('will-quit', () => {
+            // Nothing to tear down when the deferred group never loaded.
+            deferredEvents?.module?.shutdownDeferredServices();
+        });
     });
 });
