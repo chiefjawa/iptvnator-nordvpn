@@ -778,7 +778,7 @@ export interface ElectronBridgeApi {
     }) => Promise<import('./linux-vpn.interface').LinuxVpnStatus>;
     changeLinuxVpn?: (
         request: import('./linux-vpn.interface').LinuxVpnConnectionRequest
-    ) => Promise<import('./linux-vpn.interface').LinuxVpnStatus>;
+    ) => Promise<import('./linux-vpn.interface').LinuxVpnChangeResult>;
     getAppVersion: () => Promise<string>;
     platform: string;
     /** Main-owned capability: LAN remote control is unavailable in app VPN sessions. */

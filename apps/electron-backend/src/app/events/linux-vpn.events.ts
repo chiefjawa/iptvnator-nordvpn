@@ -5,8 +5,11 @@ import {
     changeLinuxVpn,
 } from '../services/linux-vpn.service';
 import type { LinuxVpnConnectionRequest } from '@iptvnator/shared/interfaces';
+import type { WindowCloseGuard } from '../services/window-close-guard.service';
 
-export function registerLinuxVpnEvents(): void {
+export function registerLinuxVpnEvents(
+    guard: Pick<WindowCloseGuard, 'requestQuit'>
+): void {
     ipcMain.handle('VPN:STATUS', () => getLinuxVpnStatus());
     ipcMain.handle(
         'VPN:CONFIGURE',
@@ -15,6 +18,7 @@ export function registerLinuxVpnEvents(): void {
     );
     ipcMain.handle(
         'VPN:CONNECT',
-        (_event, request: LinuxVpnConnectionRequest) => changeLinuxVpn(request)
+        (_event, request: LinuxVpnConnectionRequest) =>
+            changeLinuxVpn(request, (commit) => guard.requestQuit(commit))
     );
 }

@@ -15,3 +15,8 @@ export interface LinuxVpnConnectionRequest {
     enabled: boolean;
     server: string;
 }
+
+export interface LinuxVpnChangeResult {
+    status: LinuxVpnStatus;
+    cancelled: boolean;
+}

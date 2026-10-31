@@ -63,6 +63,7 @@ export class SettingsSearchService {
                 runtime.supportsEpg ||
                 runtime.supportsProviderEpg,
             'remote-control': runtime.supportsRemoteControl,
+            'app-vpn': runtime.supportsLinuxVpn,
             'startup-window-mode': runtime.supportsStartupWindowMode,
             'portal-connectivity-guard':
                 runtime.supportsPortalConnectivityGuard,

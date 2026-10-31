@@ -338,3 +338,8 @@ traffic and verifies the player's kernel network namespace. Its typed IPC accept
 an account token only for one-time helper setup; it never persists or logs that
 token. See [Linux app VPN](linux-app-vpn.md) for helper trust, fail-closed startup,
 external-player restrictions and the live network acceptance checks.
+
+Persistent VPN switches use `WindowCloseGuard.requestQuit`: policy writes and
+relaunches occur only after `will-quit`. A canceled close, native unload block,
+or renderer navigation settles the pending action without retaining a write or
+restart for a later ordinary quit.

@@ -29,6 +29,7 @@ interface RuntimeStub {
     supportsEpg: boolean;
     supportsProviderEpg: boolean;
     supportsRemoteControl: boolean;
+    supportsLinuxVpn: boolean;
     supportsStartupWindowMode: boolean;
     supportsPortalConnectivityGuard: boolean;
     supportsManagedExternalPlayers: boolean;
@@ -53,6 +54,7 @@ function setup(runtime: Partial<RuntimeStub> = {}, serverStorage = false) {
                     supportsEpg: false,
                     supportsProviderEpg: false,
                     supportsRemoteControl: false,
+                    supportsLinuxVpn: false,
                     supportsStartupWindowMode: false,
                     supportsPortalConnectivityGuard: false,
                     supportsManagedExternalPlayers: false,
@@ -82,6 +84,7 @@ const DESKTOP: Partial<RuntimeStub> = {
     supportsEpgImport: true,
     supportsEpgDataManagement: true,
     supportsRemoteControl: true,
+    supportsLinuxVpn: true,
     supportsStartupWindowMode: true,
     supportsPortalConnectivityGuard: true,
     supportsManagedExternalPlayers: true,
@@ -169,9 +172,7 @@ describe('SettingsSearchService', () => {
             'server'
         );
         expect(service.visibleEntries().map(({ id }) => id)).toEqual(
-            expect.arrayContaining([
-                'source-server',
-            ])
+            expect.arrayContaining(['source-server'])
         );
     });
 
@@ -471,5 +472,25 @@ describe('SettingsSearchService', () => {
         }
         service.completeReveal(current);
         expect(service.pendingReveal()).toBeNull();
+    });
+});
+
+describe('App VPN search', () => {
+    afterEach(() => TestBed.resetTestingModule());
+    it('finds NordVPN rows only when the runtime has the complete app VPN capability', () => {
+        const { service } = setup({ supportsLinuxVpn: true });
+        expect(
+            service.search('NordVPN').map((result) => result.entry.id)
+        ).toEqual(
+            expect.arrayContaining([
+                'app-vpn-connection',
+                'app-vpn-token',
+                'app-vpn-server',
+            ])
+        );
+    });
+    it('hides the VPN rows from unsupported runtimes', () => {
+        const { service } = setup({ supportsLinuxVpn: false });
+        expect(service.search('NordVPN')).toEqual([]);
     });
 });

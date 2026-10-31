@@ -1,5 +1,6 @@
 {
     "VPN": {
+        "CHANGE_CANCELLED": "VPN switch cancelled. Your connection is unchanged.",
         "LIMITATIONS": "Phone remote control is unavailable while connected. Close the player before installing an update manually.",
         "CONNECTED": "Connected to NordVPN",
         "PUBLIC_IP": "VPN public IP",

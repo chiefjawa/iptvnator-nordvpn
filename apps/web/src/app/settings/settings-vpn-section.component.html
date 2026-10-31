@@ -7,7 +7,7 @@
             @if (!canRestart()) {
                 <p id="vpn-save-first">{{ 'VPN.SAVE_FIRST' | translate }}</p>
             }
-            <div class="setting-item">
+            <div class="setting-item" data-setting-id="app-vpn-connection">
                 <div class="setting-item__meta">
                     <h4>{{ 'VPN.CONNECTION' | translate }}</h4>
                     <p>{{ 'VPN.DESCRIPTION' | translate }}</p>
@@ -52,7 +52,7 @@
                     }
                 </div>
             </div>
-            <div class="setting-item">
+            <div class="setting-item" data-setting-id="app-vpn-token">
                 <div class="setting-item__meta">
                     <h4 id="vpn-token-label">{{ 'VPN.TOKEN' | translate }}</h4>
                     <p>{{ 'VPN.TOKEN_DESCRIPTION' | translate }}</p>
@@ -97,7 +97,7 @@
                     </button>
                 </div>
             </div>
-            <div class="setting-item">
+            <div class="setting-item" data-setting-id="app-vpn-server">
                 <div class="setting-item__meta">
                     <h4 id="vpn-server-label">
                         {{ 'VPN.REGION' | translate }}

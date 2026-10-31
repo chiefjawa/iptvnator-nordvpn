@@ -96,7 +96,12 @@ exports, errors, status responses or application logging. The input clears after
 setup, including failed setup. Never use a real token in automated tests.
 
 Changing the connection closes/restarts the player, so save any other pending
-settings before using the connection button. The fork's updater repositories
+settings before using the connection button. A switch commits its policy and
+queues a restart only at the confirmed `will-quit` stage. Choosing Stay, a native
+unload cancellation, or a renderer reload cancels the switch and releases the
+controls without changing the connection. VPN rows are indexed by Settings
+search only when the complete Linux bridge is available.
+The fork's updater repositories
 point to `chiefjawa/iptvnator-nordvpn`; upstream official builds must not replace
 the added protection. The nightly feed is reserved at
 `chiefjawa/iptvnator-nordvpn-nightly`; this fork does not currently publish nightly

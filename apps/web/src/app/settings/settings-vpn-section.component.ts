@@ -91,10 +91,15 @@ export class SettingsVpnSectionComponent {
         try {
             const change = window.electron.changeLinuxVpn;
             if (!change) throw new Error('VPN support unavailable.');
-            await change({
+            const result = await change({
                 enabled,
                 server: this.server(),
             });
+            this.state.set(result.status);
+            if (result.cancelled) {
+                this.error.set('VPN.CHANGE_CANCELLED');
+                this.busy.set(false);
+            }
         } catch {
             this.error.set('VPN.CONNECTION_FAILED');
             this.busy.set(false);

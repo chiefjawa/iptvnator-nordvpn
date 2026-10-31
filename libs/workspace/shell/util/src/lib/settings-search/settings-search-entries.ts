@@ -1,3 +1,4 @@
+import { APP_VPN_SETTINGS_SEARCH_ENTRIES } from './settings-search-entries-vpn';
 import { PLAYBACK_SETTINGS_SEARCH_ENTRIES } from './settings-search-entries-playback';
 import { SettingsSearchEntry } from './settings-search.types';
 
@@ -84,6 +85,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
         keywords: ['network', 'offline', 'connection', 'internet', 'vpn'],
         requires: ['portal-connectivity-guard'],
     },
+    ...APP_VPN_SETTINGS_SEARCH_ENTRIES,
     ...PLAYBACK_SETTINGS_SEARCH_ENTRIES,
     {
         id: 'epg-view-mode',
@@ -268,8 +270,11 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
         keywords: ['backup', 'restore', 'import', 'export', 'migrate'],
     },
     {
-        id: 'source-server', section: 'server', labelKey: 'SOURCE_SYNC.TITLE',
-        descriptionKey: 'SOURCE_SYNC.DESCRIPTION', keywords: [...SERVER_KEYWORDS, 'NAS', 'sync', 'sources'],
+        id: 'source-server',
+        section: 'server',
+        labelKey: 'SOURCE_SYNC.TITLE',
+        descriptionKey: 'SOURCE_SYNC.DESCRIPTION',
+        keywords: [...SERVER_KEYWORDS, 'NAS', 'sync', 'sources'],
     },
     {
         id: 'remove-all-playlists',

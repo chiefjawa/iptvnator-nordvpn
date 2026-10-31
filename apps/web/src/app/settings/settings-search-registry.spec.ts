@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { SETTINGS_SEARCH_ENTRIES } from '@iptvnator/workspace/shell/util/settings-search';
 
@@ -50,11 +50,11 @@ function readTemplateRows(): TemplateRow[] {
                 id: tag.match(/data-setting-id="([^"]+)"/)?.[1] ?? null,
                 labelKey:
                     chunk.match(
-                        /<h4[^>]*>\s*\{\{\s*'(SETTINGS\.[A-Z0-9_.]+)'/
+                        /<h4[^>]*>\s*\{\{\s*'((?:SETTINGS|VPN)\.[A-Z0-9_.]+)'/
                     )?.[1] ?? null,
                 descriptionKey:
                     meta.match(
-                        /<p[^>]*>\s*\{\{\s*'(SETTINGS\.[A-Z0-9_.]+)'/
+                        /<p[^>]*>\s*\{\{\s*'((?:SETTINGS|VPN)\.[A-Z0-9_.]+)'/
                     )?.[1] ?? null,
             });
         });
@@ -115,7 +115,20 @@ describe('settings search registry', () => {
             if (entry.descriptionKey !== (row.descriptionKey ?? undefined)) {
                 problems.push(`${row.id}: description ${row.descriptionKey}`);
             }
-            if (!row.file.includes(`settings-${entry.section}-section`)) {
+            const parentTemplate = join(
+                SETTINGS_DIR,
+                `settings-${entry.section}-section.component.html`
+            );
+            const nestedSelector = `app-${row.file.replace('.component.html', '')}`;
+            const renderedByParent =
+                existsSync(parentTemplate) &&
+                readFileSync(parentTemplate, 'utf8').includes(
+                    `<${nestedSelector}`
+                );
+            if (
+                !row.file.includes(`settings-${entry.section}-section`) &&
+                !renderedByParent
+            ) {
                 problems.push(`${row.id}: rendered in ${row.file}`);
             }
             return problems;

@@ -35,18 +35,24 @@ type Listener = (...args: unknown[]) => void;
 interface FakeApp extends CloseGuardApp {
     quit: jest.Mock;
     fireBeforeQuit(): void;
+    fireWillQuit(): void;
 }
 
 function createFakeApp(): FakeApp {
     const beforeQuitListeners: Listener[] = [];
+    const willQuitListeners: Listener[] = [];
 
     return {
         on: jest.fn((event: string, listener: Listener) => {
+            if (event === 'will-quit') willQuitListeners.push(listener);
             if (event === 'before-quit') {
                 beforeQuitListeners.push(listener);
             }
         }),
         quit: jest.fn(),
+        fireWillQuit(): void {
+            willQuitListeners.forEach((listener) => listener());
+        },
         fireBeforeQuit(): void {
             beforeQuitListeners.forEach((listener) => listener());
         },
@@ -405,9 +411,7 @@ describe('bootstrapWindowCloseGuard', () => {
         const attachListeners: Array<(win: Electron.BrowserWindow) => void> =
             [];
 
-        bootstrapWindowCloseGuard((listener) =>
-            attachListeners.push(listener)
-        );
+        bootstrapWindowCloseGuard((listener) => attachListeners.push(listener));
 
         const win = createFakeWindow();
         attachListeners.forEach((listener) =>
@@ -427,9 +431,7 @@ describe('bootstrapWindowCloseGuard', () => {
         const attachListeners: Array<(win: Electron.BrowserWindow) => void> =
             [];
 
-        bootstrapWindowCloseGuard((listener) =>
-            attachListeners.push(listener)
-        );
+        bootstrapWindowCloseGuard((listener) => attachListeners.push(listener));
 
         const win = createFakeWindow();
         attachListeners.forEach((listener) =>
@@ -440,4 +442,53 @@ describe('bootstrapWindowCloseGuard', () => {
 
         expect(win.fireClose()).toBe(false);
     });
+});
+
+describe('Confirmed quit actions', () => {
+    function setup() {
+        const app = createFakeApp();
+        const win = createFakeWindow();
+        const guard = new WindowCloseGuard(app);
+        guard.trackQuitLifecycle();
+        guard.attachToWindow(win);
+        return { app, win, guard };
+    }
+    it('commits only at will-quit after close confirmation', async () => {
+        const { app, win, guard } = setup();
+        const commit = jest.fn();
+        guard.setGuardActive(true);
+        const result = guard.requestQuit(commit);
+        app.fireBeforeQuit();
+        expect(win.fireClose()).toBe(true);
+        expect(commit).not.toHaveBeenCalled();
+        guard.confirmClose();
+        expect(commit).not.toHaveBeenCalled();
+        app.fireWillQuit();
+        await expect(result).resolves.toBe(true);
+        expect(commit).toHaveBeenCalledTimes(1);
+    });
+    it('reports Stay without retaining a transition for a later ordinary quit', async () => {
+        const { app, win, guard } = setup();
+        const commit = jest.fn();
+        guard.setGuardActive(true);
+        const result = guard.requestQuit(commit);
+        app.fireBeforeQuit();
+        win.fireClose();
+        guard.cancelClose();
+        await expect(result).resolves.toBe(false);
+        app.fireWillQuit();
+        expect(commit).not.toHaveBeenCalled();
+    });
+    it.each(['will-prevent-unload', 'did-navigate', 'render-process-gone'])(
+        'cancels a pending action after %s',
+        async (event) => {
+            const { app, win, guard } = setup();
+            const commit = jest.fn();
+            const result = guard.requestQuit(commit);
+            win.fireWebContentsEvent(event);
+            await expect(result).resolves.toBe(false);
+            app.fireWillQuit();
+            expect(commit).not.toHaveBeenCalled();
+        }
+    );
 });

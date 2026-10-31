@@ -12,12 +12,20 @@ import { app } from 'electron';
 import { runVpnHelper } from './linux-vpn-helper';
 import {
     configureLinuxVpn,
-    changeLinuxVpn,
+    changeLinuxVpn as changeLinuxVpnWithGuard,
     readVpnConfig,
     vpnConfigPath,
     writeVpnConfig,
     getLinuxVpnStatus,
 } from './linux-vpn.service';
+const quit = jest.fn(async (commit: () => void) => {
+    commit();
+    app.quit();
+    return true;
+});
+const changeLinuxVpn = (
+    request: Parameters<typeof changeLinuxVpnWithGuard>[0]
+) => changeLinuxVpnWithGuard(request, quit);
 
 (process.platform === 'linux' ? describe : describe.skip)(
     'Linux VPN account and connection controls',
@@ -32,6 +40,11 @@ import {
                     ? JSON.stringify({ available: true, compatible: true })
                     : 'vopono test'
             );
+            quit.mockImplementation(async (commit) => {
+                commit();
+                app.quit();
+                return true;
+            });
             jest.clearAllMocks();
         });
         afterEach(() => {
@@ -79,8 +92,7 @@ import {
             ).rejects.toThrow('Finish NordVPN setup');
             expect(readVpnConfig().enabled).toBe(false);
         });
-        it('persists the protected restart before quitting; no token is needed on later starts', async () => {
-            jest.useFakeTimers();
+        it('commits a protected restart only through a confirmed quit', async () => {
             writeVpnConfig({
                 enabled: false,
                 configured: true,
@@ -88,10 +100,28 @@ import {
             });
             await changeLinuxVpn({ enabled: true, server: 'canada' });
             expect(readVpnConfig().enabled).toBe(true);
-            expect(app.quit).not.toHaveBeenCalled();
-            jest.runAllTimers();
+
             expect(app.relaunch).toHaveBeenCalledTimes(1);
             expect(app.quit).toHaveBeenCalledTimes(1);
+        });
+        it('leaves the policy and restart queue untouched when the user stays', async () => {
+            writeVpnConfig({
+                enabled: false,
+                configured: true,
+                server: 'canada',
+            });
+            quit.mockResolvedValue(false);
+            const result = await changeLinuxVpn({
+                enabled: true,
+                server: 'united_states',
+            });
+            expect(result.cancelled).toBe(true);
+            expect(readVpnConfig()).toEqual({
+                enabled: false,
+                configured: true,
+                server: 'canada',
+            });
+            expect(app.relaunch).not.toHaveBeenCalled();
         });
         it('shows missing support as unavailable, never connected', async () => {
             run.mockRejectedValue(new Error('missing'));

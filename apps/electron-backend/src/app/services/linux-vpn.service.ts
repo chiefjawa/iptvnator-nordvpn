@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import type {
     LinuxVpnConnectionRequest,
     LinuxVpnStatus,
+    LinuxVpnChangeResult,
 } from '@iptvnator/shared/interfaces';
 import { daemonIsReady, runVpnHelper } from './linux-vpn-helper';
 import { getVpnPublicIp } from './linux-vpn-egress';
@@ -101,8 +102,9 @@ export async function configureLinuxVpn(
 }
 
 export async function changeLinuxVpn(
-    request: LinuxVpnConnectionRequest
-): Promise<LinuxVpnStatus> {
+    request: LinuxVpnConnectionRequest,
+    requestQuit: (commit: () => void) => Promise<boolean>
+): Promise<LinuxVpnChangeResult> {
     if (process.platform !== 'linux')
         throw new Error('App VPN is available on Linux only.');
     if (
@@ -118,16 +120,18 @@ export async function changeLinuxVpn(
             'Finish NordVPN setup and start the VPN helper service first.'
         );
     }
-    writeVpnConfig({
-        ...readVpnConfig(),
-        enabled: request.enabled,
-        server: request.server,
-    });
-    // A protected process cannot relaunch itself onto the host network. Close
-    // it; the next ordinary desktop launch inherits the host network again.
-    setTimeout(() => {
+    const confirmed = await requestQuit(() => {
+        writeVpnConfig({
+            ...readVpnConfig(),
+            enabled: request.enabled,
+            server: request.server,
+        });
         if (request.enabled && !protectedVpnSession()) app.relaunch();
-        app.quit();
-    }, 200);
-    return { ...status, enabled: request.enabled, server: request.server };
+    });
+    return {
+        status: confirmed
+            ? { ...status, enabled: request.enabled, server: request.server }
+            : status,
+        cancelled: !confirmed,
+    };
 }

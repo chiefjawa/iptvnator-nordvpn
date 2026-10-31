@@ -26,7 +26,7 @@ type CloseIntent = 'close' | 'quit';
 
 /** The slice of `Electron.App` the guard needs — injectable for tests. */
 export interface CloseGuardApp {
-    on(event: 'before-quit', listener: () => void): unknown;
+    on(event: 'before-quit' | 'will-quit', listener: () => void): unknown;
     quit(): void;
 }
 
@@ -50,6 +50,11 @@ export class WindowCloseGuard {
     /** Increments per interception; cancellations must cite the current one. */
     private requestSeq = 0;
     private window: CloseGuardWindow | null = null;
+    private pendingQuitAction?: {
+        commit: () => void;
+        resolve: (confirmed: boolean) => void;
+        reject: (error: unknown) => void;
+    };
 
     constructor(private readonly electronApp: CloseGuardApp) {}
 
@@ -63,6 +68,37 @@ export class WindowCloseGuard {
         this.electronApp.on('before-quit', () => {
             this.quitInProgress = true;
         });
+        this.electronApp.on('will-quit', () => this.finishQuitAction(true));
+    }
+
+    /** Commit a persistent transition only after every close guard permits quit. */
+    requestQuit(commit: () => void): Promise<boolean> {
+        if (this.pendingQuitAction)
+            return Promise.reject(new Error('A quit is already pending.'));
+        if (this.pendingIntent !== null) return Promise.resolve(false);
+        if (!this.window || this.window.isDestroyed())
+            return Promise.resolve(false);
+        return new Promise((resolve, reject) => {
+            this.pendingQuitAction = { commit, resolve, reject };
+            try {
+                this.electronApp.quit();
+            } catch (error) {
+                this.pendingQuitAction = undefined;
+                reject(error);
+            }
+        });
+    }
+
+    private finishQuitAction(confirmed: boolean): void {
+        const action = this.pendingQuitAction;
+        this.pendingQuitAction = undefined;
+        if (!action) return;
+        try {
+            if (confirmed) action.commit();
+            action.resolve(confirmed);
+        } catch (error) {
+            action.reject(error);
+        }
     }
 
     /**
@@ -70,6 +106,7 @@ export class WindowCloseGuard {
      * lives on); per-window guard state starts over with each new window.
      */
     attachToWindow(win: CloseGuardWindow): void {
+        this.finishQuitAction(false);
         this.window = win;
         this.guardActive = false;
         this.bypassClose = false;
@@ -92,13 +129,18 @@ export class WindowCloseGuard {
         // unclosable, and a pending intent from an unanswered request would
         // leak into the next interception cycle.
         win.webContents.on('did-navigate', () => {
+            this.finishQuitAction(false);
             this.guardActive = false;
             this.pendingIntent = null;
         });
         win.webContents.on('render-process-gone', () => {
+            this.finishQuitAction(false);
             this.guardActive = false;
             this.pendingIntent = null;
         });
+        win.webContents.on('will-prevent-unload', () =>
+            this.finishQuitAction(false)
+        );
     }
 
     setGuardActive(active: boolean): void {
@@ -174,6 +216,7 @@ export class WindowCloseGuard {
         }
 
         this.pendingIntent = null;
+        this.finishQuitAction(false);
     }
 
     private handleClose(

@@ -131,7 +131,7 @@ export default class Main {
         );
         App.onMainWindowCreated(installApplicationMenu);
         registerStaticHeaderShims();
-        registerLinuxVpnEvents();
+        registerLinuxVpnEvents(windowCloseGuard);
         WindowEvents.bootstrapWindowEvents();
         PlaylistOpenEvents.bootstrapPlaylistOpenEvents();
 

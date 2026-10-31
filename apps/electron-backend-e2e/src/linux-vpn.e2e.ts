@@ -46,6 +46,13 @@ test.describe('Linux app-only VPN', () => {
             await expect(
                 player.mainWindow.getByTestId('vpn-public-ip')
             ).toHaveText('203.0.113.7');
+            await player.mainWindow.getByRole('searchbox').fill('NordVPN');
+            await player.mainWindow
+                .getByTestId('settings-search-result-app-vpn-token')
+                .click();
+            await expect(
+                player.mainWindow.locator('[data-setting-id="app-vpn-token"]')
+            ).toBeInViewport();
         } finally {
             await closeElectronApp(player);
         }
@@ -58,7 +65,7 @@ test.describe('Linux app-only VPN', () => {
         const binary = join(binaryDir, 'vopono');
         writeFileSync(
             binary,
-            '#!/bin/sh\ncase "$1" in\n--version) echo "vopono fixture";;\ndaemon) echo \'{"available":true,"compatible":true}\';;\nsync) test "$NORDVPN_ACCESS_TOKEN" = "SYNTHETIC_TEST_TOKEN_123456789" || exit 1; echo \'{"version":1,"success":true}\';;\n*) exit 1;;\nesac\n'
+            '#!/bin/sh\ncase "$1" in\n--version) echo "vopono fixture";;\ndaemon) if [ -f "$(dirname "$0")/hold-quit" ]; then sleep 1; fi; echo \'{"available":true,"compatible":true}\';;\nsync) test "$NORDVPN_ACCESS_TOKEN" = "SYNTHETIC_TEST_TOKEN_123456789" || exit 1; echo \'{"version":1,"success":true}\';;\n*) exit 1;;\nesac\n'
         );
         chmodSync(binary, 0o700);
         const player = await launchElectronApp(dataDir, {
@@ -120,8 +127,45 @@ test.describe('Linux app-only VPN', () => {
                     .getByTestId('vpn-settings')
                     .screenshot({ path: join(artifacts, theme + '.png') });
             }
+            // The main form can become dirty while helper status is in flight.
+            writeFileSync(join(binaryDir, 'hold-quit'), '');
+            await player.mainWindow.getByTestId('vpn-connect').click();
+            await player.mainWindow
+                .getByTestId('select-theme')
+                .getByTestId('LIGHT_THEME')
+                .click();
+            await expect(
+                player.mainWindow.getByTestId('unsaved-dialog-stay')
+            ).toBeVisible();
+            await player.mainWindow.getByTestId('unsaved-dialog-stay').click();
+            await expect(
+                player.mainWindow.getByText(
+                    'VPN switch cancelled. Your connection is unchanged.',
+                    { exact: true }
+                )
+            ).toBeVisible();
+            expect(
+                JSON.parse(
+                    readFileSync(
+                        join(dataDir, 'user-data', 'linux-vpn.json'),
+                        'utf8'
+                    )
+                ).enabled
+            ).toBe(false);
+            await player.mainWindow.getByTestId('discard-settings').click();
+            await expect(
+                player.mainWindow.getByTestId('vpn-connect')
+            ).toBeEnabled();
         } finally {
             await closeElectronApp(player);
         }
+        expect(
+            JSON.parse(
+                readFileSync(
+                    join(dataDir, 'user-data', 'linux-vpn.json'),
+                    'utf8'
+                )
+            ).enabled
+        ).toBe(false);
     });
 });
