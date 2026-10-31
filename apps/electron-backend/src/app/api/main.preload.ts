@@ -443,6 +443,7 @@ const electronApi: ElectronBridgeApi = {
     changeLinuxVpn: (request) => ipcRenderer.invoke('VPN:CONNECT', request),
     getAppVersion: () => ipcRenderer.invoke('get-app-version'),
     platform: process.platform,
+    appVpnSession: process.argv.includes('--iptvnator-app-vpn'),
     getAppUpdateStatus: () => ipcRenderer.invoke(APP_UPDATE_GET_STATUS),
     checkForAppUpdate: () => ipcRenderer.invoke(APP_UPDATE_CHECK),
     downloadAppUpdate: () => ipcRenderer.invoke(APP_UPDATE_DOWNLOAD),

@@ -34,7 +34,9 @@ subscription stream on a phone or TV during a one-connection playback test.
 `linux-vpn-startup.ts` gates ordinary application bootstrap **before** the
 viewing window, its deferred events, update checks or provider requests start.
 An unprotected controller starts vopono with a fixed NordVPN/WireGuard command
-and a per-profile namespace name. The daemon runs the child player as the user.
+and a fresh namespace name containing the profile hash and a random session
+nonce. Restarts never reuse a namespace that the helper may still be tearing
+down. The daemon runs the child player as the user.
 The controller holds a separate, temporary Chromium session directory, drains
 helper/player output without logging it, and lives until the protected app exits.
 It must not acquire the viewing player's single-instance lock or Chromium data.
@@ -69,6 +71,17 @@ running unprotected VLC. Host-spawn bridges in Flatpak are refused while app VPN
 is active; use the built-in player. AppImage/native builds are the intended
 installation targets. Do not add a proxy-only implementation: it would miss
 Node requests, DNS, external players or media subrequests.
+
+Source-server profile changes request a restart through the outside controller,
+which creates a fresh protected session after the current player exits. A
+replacement never inherits a namespace that is being torn down. Automatic
+self-installing updates are unavailable while app VPN is active; close the
+player and install the fork's update manually.
+
+LAN remote control is also unavailable in protected sessions: the main-owned
+preload capability hides its controls, its HTTP listener refuses to start, and
+the address API does not advertise namespace-private addresses. Saved remote
+control preferences are preserved for ordinary launches with app VPN off.
 
 ## Credentials and persistence
 

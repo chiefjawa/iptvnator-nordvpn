@@ -12,6 +12,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { HttpServer } from './http-server';
+jest.mock('../services/linux-vpn-session', () => ({
+    protectedVpnSession: jest.fn(() => false),
+}));
+import { protectedVpnSession } from '../services/linux-vpn-session';
 
 interface CapturedServer {
     listening: Promise<void>;
@@ -124,6 +128,16 @@ describe('HttpServer', () => {
     let distPath: string;
     let server: HttpServer;
     let tempRoot: string;
+    it('refuses to advertise a LAN server inside an app-only VPN namespace', () => {
+        jest.mocked(protectedVpnSession).mockReturnValue(true);
+        try {
+            const createServer = jest.fn();
+            new HttpServer({ createServer }).start(8765);
+            expect(createServer).not.toHaveBeenCalled();
+        } finally {
+            jest.mocked(protectedVpnSession).mockReturnValue(false);
+        }
+    });
 
     beforeEach(() => {
         jest.spyOn(console, 'log').mockImplementation(() => undefined);

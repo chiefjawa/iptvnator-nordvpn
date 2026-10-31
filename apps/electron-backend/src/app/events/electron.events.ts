@@ -1,3 +1,4 @@
+import { protectedVpnSession } from '../services/linux-vpn-session';
 /**
  * This module is responsible on handling all the inter process communications
  * between the frontend to the electron backend.
@@ -44,6 +45,7 @@ ipcMain.on(DEBUG_TRACE_EVENT_CHANNEL, (event, payload) => {
 
 // Get local IP addresses for remote control URL display
 ipcMain.handle('get-local-ip-addresses', () => {
+  if (protectedVpnSession()) return [];
   const interfaces = os.networkInterfaces();
   const addresses: string[] = [];
 

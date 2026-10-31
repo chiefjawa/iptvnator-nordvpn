@@ -1,3 +1,4 @@
+import { requestAppRelaunch } from '../services/linux-vpn-restart';
 import { app, BrowserWindow, ipcMain, powerMonitor } from 'electron';
 import {
     SOURCE_SYNC_CAPABILITY,
@@ -190,7 +191,7 @@ export function registerSourceSyncEvents(prepareRestart: () => void): void {
                 // app.exit() skips will-quit, where ordinary quits tear down
                 // managed players and the database worker.
                 prepareRestart();
-                app.relaunch();
+                requestAppRelaunch();
                 app.exit();
             }
             return {
@@ -203,7 +204,7 @@ export function registerSourceSyncEvents(prepareRestart: () => void): void {
     ipcMain.handle(SOURCE_SYNC_DISCONNECT, () => {
         clearSourceServerConfig();
         prepareRestart();
-        app.relaunch();
+        requestAppRelaunch();
         app.exit();
     });
 }

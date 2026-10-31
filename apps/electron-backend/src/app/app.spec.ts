@@ -1,4 +1,8 @@
 const mockClearStorageData = jest.fn();
+jest.mock('./services/linux-vpn-session', () => ({
+    protectedVpnSession: jest.fn(() => false),
+}));
+import { protectedVpnSession } from './services/linux-vpn-session';
 const mockIsFrameCopyRuntimeUsable = jest.fn<boolean, []>();
 const mockIsEmbeddedMpvFeatureEnabled = jest.fn<boolean, []>();
 const mockHasSwitch = jest.fn<boolean, [string]>();
@@ -804,5 +808,18 @@ describe('Electron app security helpers', () => {
         expect(mockClearStorageData).toHaveBeenCalledWith({
             storages: ['serviceworkers', 'cachestorage'],
         });
+    });
+});
+
+describe('VPN renderer capability boundary', () => {
+    it('marks protected renderers so they do not advertise LAN-only controls', () => {
+        jest.mocked(protectedVpnSession).mockReturnValue(true);
+        try {
+            expect(
+                getMainWindowWebPreferences()?.additionalArguments
+            ).toContain('--iptvnator-app-vpn');
+        } finally {
+            jest.mocked(protectedVpnSession).mockReturnValue(false);
+        }
     });
 });

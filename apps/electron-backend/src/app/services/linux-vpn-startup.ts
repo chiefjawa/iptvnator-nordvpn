@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog } from 'electron';
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -11,6 +12,7 @@ import {
 } from './linux-vpn.service';
 import { vpnLaunchArguments, vpnNamespaceName } from './linux-vpn-policy';
 import { createVpnLaunchGuard, stopVpnLaunch } from './linux-vpn-launch-guard';
+import { vpnRestartRequested } from './linux-vpn-restart';
 import {
     scheduleDeferredFixPath,
     waitForLoginShellPath,
@@ -59,7 +61,8 @@ async function launchProtectedPlayer(helperConfig: string): Promise<void> {
     let aborting = false;
     let launched = false;
     let rejectLaunch: ((error: Error) => void) | undefined;
-    const namespace = vpnNamespaceName(app.getPath('userData'));
+    const session = randomBytes(6).toString('hex');
+    const namespace = `${vpnNamespaceName(app.getPath('userData'))}-${session}`;
     const ownedNamespace = `${namespace}-u${process.getuid?.()}`;
     try {
         if (process.env.VOPONO_NS) throw new Error('Unverified VPN namespace.');
@@ -101,6 +104,8 @@ async function launchProtectedPlayer(helperConfig: string): Promise<void> {
         // it, and keeps the daemon client alive until the protected app exits.
         const env = { ...process.env };
         delete env.NORDVPN_ACCESS_TOKEN;
+        env.IPTVNATOR_VPN_CONTROLLER_DIR = dirname(helperConfig);
+        env.IPTVNATOR_VPN_SESSION = session;
         env.IPTVNATOR_VPN_HOST_NETNS = String(
             statSync('/proc/self/ns/net').ino
         );
@@ -168,8 +173,11 @@ async function launchProtectedPlayer(helperConfig: string): Promise<void> {
             child?.once('close', (code) => {
                 stopped = true;
                 clearTimeout(timer);
-                if (launched && !aborting) app.exit(code ?? 1);
-                else abort(new Error('VPN connection did not start.'));
+                if (launched && !aborting) {
+                    if (vpnRestartRequested(dirname(helperConfig)))
+                        app.relaunch();
+                    app.exit(code ?? 1);
+                } else abort(new Error('VPN connection did not start.'));
             });
         });
     } catch {

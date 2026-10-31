@@ -1,3 +1,4 @@
+import { protectedVpnSession } from '../services/linux-vpn-session';
 import { app } from 'electron';
 import * as fs from 'fs';
 import * as http from 'http';
@@ -110,6 +111,7 @@ export class HttpServer {
      * Start the HTTP server
      */
     start(port?: number): void {
+        if (protectedVpnSession()) return;
         if (port !== undefined) {
             this.port = port;
         }

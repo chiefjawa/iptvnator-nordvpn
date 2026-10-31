@@ -1,3 +1,4 @@
+import { protectedVpnSession } from './linux-vpn-session';
 import {
     APP_UPDATE_STATUS_CHANGED,
     AppUpdateChannel,
@@ -183,11 +184,13 @@ export class AppUpdateService {
         );
         this.isPackaged = options.app.isPackaged;
         this.channel = options.channel ?? DEFAULT_APP_UPDATE_CHANNEL;
-        this.supportedSelfUpdate = isSelfUpdateSupported(
-            options.app.isPackaged,
-            options.platform ?? process.platform,
-            options.processEnv ?? process.env
-        );
+        this.supportedSelfUpdate =
+            !protectedVpnSession() &&
+            isSelfUpdateSupported(
+                options.app.isPackaged,
+                options.platform ?? process.platform,
+                options.processEnv ?? process.env
+            );
         const releaseFetcher: ReleaseFetcher =
             options.releaseFetcher ??
             ((url, init) => fetch(url, init) as Promise<ReleaseFetchResponse>);

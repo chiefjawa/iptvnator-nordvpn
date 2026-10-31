@@ -16,6 +16,12 @@ Related architecture docs:
 
 Remote control is a desktop-only feature that serves a mobile-friendly web app from the Electron backend and routes remote actions into the running renderer.
 
+In this personal fork, LAN remote control is unavailable while app-only VPN is
+active. The protected backend cannot serve the host's LAN interfaces, so the
+HTTP listener stays off, the renderer capability hides its controls, and no
+namespace-private address is advertised. Existing preferences remain saved.
+See [Linux app VPN](linux-app-vpn.md).
+
 Current capabilities:
 
 - Channel up / down

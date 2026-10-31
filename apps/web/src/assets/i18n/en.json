@@ -1,5 +1,6 @@
 {
     "VPN": {
+        "LIMITATIONS": "Phone remote control is unavailable while connected. Close the player before installing an update manually.",
         "CONNECTED": "Connected to NordVPN",
         "PUBLIC_IP": "VPN public IP",
         "IP_UNAVAILABLE": "Unable to verify; traffic remains protected",

@@ -1,3 +1,4 @@
+import { protectedVpnSession } from './services/linux-vpn-session';
 import { app, BrowserWindow, Menu, screen, session, shell } from 'electron';
 import {
     ElectronBridgeWindowState,
@@ -126,7 +127,8 @@ export function getMainWindowWebPreferences(): Electron.BrowserWindowConstructor
             (process.env.IPTVNATOR_ENABLE_EMBEDDED_MPV_FRAME_COPY ?? '')
                 .trim()
                 .toLowerCase()
-        ) && isFrameCopyRuntimeUsable();
+        ) &&
+        isFrameCopyRuntimeUsable();
     return {
         contextIsolation: true,
         nodeIntegration: false,
@@ -138,11 +140,17 @@ export function getMainWindowWebPreferences(): Electron.BrowserWindowConstructor
         // audible media and picture-in-picture running at full rate.
         backgroundThrottling: true,
         preload: join(__dirname, 'main.preload.js'),
+        ...(protectedVpnSession()
+            ? { additionalArguments: ['--iptvnator-app-vpn'] }
+            : {}),
     };
 }
 
 export async function clearElectronServiceWorkerStorage(
-    electronSession: Pick<Electron.Session, 'clearStorageData'> = session.defaultSession
+    electronSession: Pick<
+        Electron.Session,
+        'clearStorageData'
+    > = session.defaultSession
 ): Promise<void> {
     try {
         await electronSession.clearStorageData({

@@ -382,6 +382,7 @@ export class RuntimeCapabilitiesService {
 
     get supportsRemoteControl(): boolean {
         return (
+            this.electronBridge?.appVpnSession !== true &&
             this.hasElectronMethod('updateRemoteControlStatus') &&
             this.hasElectronMethod('onChannelChange') &&
             this.hasElectronMethod('onRemoteControlCommand')

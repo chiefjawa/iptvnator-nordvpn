@@ -12,8 +12,12 @@ import {
     'Linux app VPN boundary',
     () => {
         const namespace = vpnNamespaceName('/test/profile');
-        const owned = `${namespace}-u${process.getuid?.()}`;
-        const env = { VOPONO_NS: owned, IPTVNATOR_VPN_HOST_NETNS: '11' };
+        const owned = `${namespace}-012345abcdef-u${process.getuid?.()}`;
+        const env = {
+            VOPONO_NS: owned,
+            IPTVNATOR_VPN_HOST_NETNS: '11',
+            IPTVNATOR_VPN_SESSION: '012345abcdef',
+        };
         it('starts disabled only for genuinely missing settings', () => {
             expect(normalizeVpnConfig(undefined)).toEqual({
                 enabled: false,
@@ -46,6 +50,13 @@ import {
                 )
             ).toBe(false);
             expect(inVpnNamespace(namespace, env, () => 11)).toBe(false);
+            expect(
+                inVpnNamespace(
+                    namespace,
+                    { ...env, IPTVNATOR_VPN_SESSION: '../invalid' },
+                    () => 22
+                )
+            ).toBe(false);
             expect(
                 inVpnNamespace(
                     namespace,

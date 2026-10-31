@@ -26,6 +26,19 @@ describe('RuntimeCapabilitiesService', () => {
         delete testWindow.electron['changeLinuxVpn'];
         expect(service.supportsLinuxVpn).toBe(false);
     });
+    it('does not advertise LAN remote control from an app VPN session', () => {
+        const service = new RuntimeCapabilitiesService();
+        testWindow.electron = {
+            platform: 'linux',
+            appVpnSession: true,
+            updateRemoteControlStatus: jest.fn(),
+            onChannelChange: jest.fn(),
+            onRemoteControlCommand: jest.fn(),
+        };
+        expect(service.supportsRemoteControl).toBe(false);
+        testWindow.electron['appVpnSession'] = false;
+        expect(service.supportsRemoteControl).toBe(true);
+    });
 
     it('offers the portal cooldown setting only with both desktop bridge methods', () => {
         const service = new RuntimeCapabilitiesService();

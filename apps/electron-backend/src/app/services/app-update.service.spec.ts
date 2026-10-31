@@ -1,4 +1,8 @@
 import { EventEmitter } from 'events';
+jest.mock('./linux-vpn-session', () => ({
+    protectedVpnSession: jest.fn(() => false),
+}));
+import { protectedVpnSession } from './linux-vpn-session';
 import {
     AppUpdateChannel,
     ELECTRON_BRIDGE_APP_UPDATE_STATUSES,
@@ -957,5 +961,26 @@ describe('AppUpdateService', () => {
             '/repos/chiefjawa/iptvnator-nordvpn-nightly/releases',
             '/repos/chiefjawa/iptvnator-nordvpn/releases',
         ]);
+    });
+});
+
+describe('VPN updater boundary', () => {
+    it('uses manual updates instead of launching a replacement in a dying namespace', () => {
+        jest.mocked(protectedVpnSession).mockReturnValue(true);
+        try {
+            const updater = new FakeUpdater();
+            const service = new AppUpdateService({
+                app: { isPackaged: true, getVersion: () => '0.25.0' },
+                platform: 'linux',
+                processEnv: { APPIMAGE: '/tmp/IPTVnator.AppImage' },
+                updater,
+                getMainWindow: () => null,
+            });
+            expect(service.getStatus().supportedSelfUpdate).toBe(false);
+            service.installUpdate();
+            expect(updater.quitAndInstall).not.toHaveBeenCalled();
+        } finally {
+            jest.mocked(protectedVpnSession).mockReturnValue(false);
+        }
     });
 });

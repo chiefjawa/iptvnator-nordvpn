@@ -53,7 +53,9 @@ export function inVpnNamespace(
     env: NodeJS.ProcessEnv = process.env,
     inode: (path: string) => number = (path) => statSync(path).ino
 ): boolean {
-    const owned = `${namespace}-u${process.getuid?.()}`;
+    const session = env.IPTVNATOR_VPN_SESSION;
+    if (!session || !/^[a-f0-9]{12}$/.test(session)) return false;
+    const owned = `${namespace}-${session}-u${process.getuid?.()}`;
     if (process.platform !== 'linux' || env.VOPONO_NS !== owned) return false;
     try {
         const host = Number(env.IPTVNATOR_VPN_HOST_NETNS);
