@@ -80,9 +80,9 @@ describe('main preload performance marker gates', () => {
 
         expect(
             harness
-                .getSentPayloads<
-                    Record<string, unknown>
-                >(DEBUG_TRACE_EVENT_CHANNEL)
+                .getSentPayloads<Record<string, unknown>>(
+                    DEBUG_TRACE_EVENT_CHANNEL
+                )
                 .map(({ method, phase }) => ({ method, phase }))
         ).toEqual([
             {
@@ -97,6 +97,21 @@ describe('main preload performance marker gates', () => {
         expect(harness.getMarkers()).toEqual([]);
     });
 
+    it('keeps a VPN token keyed for redaction before tracing the bridge call', async () => {
+        await harness.load({ [PRELOAD_ENVIRONMENT.TRACE_IPC]: '1' });
+        const token = 'SYNTHETIC_TRACE_TOKEN_123456789';
+        await harness.getApi().configureLinuxVpn?.({ token });
+        expect(harness.ipcRenderer.invoke).toHaveBeenCalledWith(
+            'VPN:CONFIGURE',
+            { token }
+        );
+        const traces = harness.getSentPayloads(DEBUG_TRACE_EVENT_CHANNEL);
+        expect(traces.length).toBeGreaterThan(0);
+        expect(JSON.stringify(redactSensitiveData(traces))).not.toContain(
+            token
+        );
+    });
+
     it('keeps debug tracing unchanged when both gates are enabled', async () => {
         await harness.load({
             [PRELOAD_ENVIRONMENT.PERF_CAPTURE]: '1',
@@ -107,9 +122,9 @@ describe('main preload performance marker gates', () => {
 
         expect(
             harness
-                .getSentPayloads<
-                    Record<string, unknown>
-                >(DEBUG_TRACE_EVENT_CHANNEL)
+                .getSentPayloads<Record<string, unknown>>(
+                    DEBUG_TRACE_EVENT_CHANNEL
+                )
                 .map(({ method, phase }) => ({ method, phase }))
         ).toEqual([
             {

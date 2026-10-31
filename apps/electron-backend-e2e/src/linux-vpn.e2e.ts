@@ -7,10 +7,49 @@ import {
     closeElectronApp,
     openSettings,
     saveSettings,
+    electronMainPath,
 } from './electron-test-fixtures';
 
 test.describe('Linux app-only VPN', () => {
     test.skip(process.platform !== 'linux', 'App VPN is Linux only');
+    test('announces a verified connection and shows its public IP in settings', async ({
+        dataDir,
+    }) => {
+        const entryPoint = join(dataDir, 'vpn-status-fixture.cjs');
+        writeFileSync(
+            entryPoint,
+            `
+            const {ipcMain}=require('electron');
+            const handle=ipcMain.handle.bind(ipcMain);
+            ipcMain.handle=(channel,listener)=>handle(channel,channel==='VPN:STATUS'
+                ? ()=>({supported:true,helperAvailable:true,daemonAvailable:true,
+                    configured:true,enabled:true,connected:true,server:'canada',publicIp:'203.0.113.7'})
+                : listener);
+            require(${JSON.stringify(electronMainPath)});
+        `
+        );
+        const player = await launchElectronApp(dataDir, {
+            entryPoint,
+            args: ['--ozone-platform=x11', '--disable-gpu'],
+        });
+        try {
+            await expect(
+                player.mainWindow.getByText(
+                    "NordVPN connected. Your app's public IP is 203.0.113.7.",
+                    { exact: true }
+                )
+            ).toBeVisible();
+            await openSettings(player.mainWindow);
+            await expect(
+                player.mainWindow.getByTestId('vpn-status')
+            ).toHaveText('Connected to NordVPN');
+            await expect(
+                player.mainWindow.getByTestId('vpn-public-ip')
+            ).toHaveText('203.0.113.7');
+        } finally {
+            await closeElectronApp(player);
+        }
+    });
     test('sets up an account through the real bridge without persisting its token', async ({
         dataDir,
     }) => {

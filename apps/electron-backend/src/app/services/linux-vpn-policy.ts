@@ -91,6 +91,6 @@ export function vpnLaunchArguments(
         '--vopono-config',
         helperConfig,
         '--json',
-        quoteVpnCommand(args),
+        quoteVpnCommand(args).replace(/\$/g, () => '$$'),
     ];
 }

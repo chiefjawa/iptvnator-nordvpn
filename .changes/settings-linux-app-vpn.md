@@ -4,4 +4,4 @@ area: settings
 highlight: App-only NordVPN on Linux
 ---
 
-Linux users can set up NordVPN with an access token and launch IPTVnator through its own protected connection. The rest of the computer keeps its normal connection. App VPN needs the separate VPN support service; connecting restarts the player, and disconnecting closes it.
+Set up NordVPN with an access token to protect only IPTVnator and its players on Linux. Settings show the public IP, and startup confirms a verified connection or warns if it cannot be checked. Requires the separate VPN helper service. Connecting restarts the player; disconnecting closes it.

@@ -773,9 +773,9 @@ export interface ElectronBridgeApi {
     getLinuxVpnStatus?: () => Promise<
         import('./linux-vpn.interface').LinuxVpnStatus
     >;
-    configureLinuxVpn?: (
-        token: string
-    ) => Promise<import('./linux-vpn.interface').LinuxVpnStatus>;
+    configureLinuxVpn?: (request: {
+        token: string;
+    }) => Promise<import('./linux-vpn.interface').LinuxVpnStatus>;
     changeLinuxVpn?: (
         request: import('./linux-vpn.interface').LinuxVpnConnectionRequest
     ) => Promise<import('./linux-vpn.interface').LinuxVpnStatus>;

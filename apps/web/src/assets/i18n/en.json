@@ -1,5 +1,10 @@
 {
     "VPN": {
+        "CONNECTED": "Connected to NordVPN",
+        "PUBLIC_IP": "VPN public IP",
+        "IP_UNAVAILABLE": "Unable to verify; traffic remains protected",
+        "STARTUP_CONNECTED": "NordVPN connected. Your app's public IP is {{ip}}.",
+        "STARTUP_UNVERIFIED": "VPN protection is enabled, but its internet connection could not be verified. Check App VPN in Settings.",
         "TITLE": "App VPN · NordVPN",
         "SAVE_FIRST": "Save or discard your other settings before changing the VPN connection.",
         "CONNECTION": "Private connection",

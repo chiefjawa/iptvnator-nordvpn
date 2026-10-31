@@ -7,6 +7,8 @@ export interface LinuxVpnStatus {
     enabled: boolean;
     connected: boolean;
     server: string;
+    /** Last short-lived public-IP check, made only inside the protected player. */
+    publicIp?: string;
 }
 
 export interface LinuxVpnConnectionRequest {

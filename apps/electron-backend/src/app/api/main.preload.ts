@@ -438,8 +438,8 @@ const electronApi: ElectronBridgeApi = {
         dbSaveContentProgressListeners.clear();
     },
     getLinuxVpnStatus: () => ipcRenderer.invoke('VPN:STATUS'),
-    configureLinuxVpn: (token) =>
-        ipcRenderer.invoke('VPN:CONFIGURE', { token }),
+    configureLinuxVpn: (request) =>
+        ipcRenderer.invoke('VPN:CONFIGURE', request),
     changeLinuxVpn: (request) => ipcRenderer.invoke('VPN:CONNECT', request),
     getAppVersion: () => ipcRenderer.invoke('get-app-version'),
     platform: process.platform,

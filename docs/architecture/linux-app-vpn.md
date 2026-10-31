@@ -7,9 +7,9 @@ not change the computer's default route.
 ## Usage
 
 1. Install the token-capable **vopono** helper, `wireguard-tools`, and its
-   privileged daemon. Use the current upstream source whose NordVPN provider
-   implements token-based WireGuard sync; older OpenVPN-only builds are not
-   compatible. Consult the [helper's guide](https://github.com/jamesmcm/vopono/blob/master/USERGUIDE.md#nordvpn).
+   privileged daemon. The official vopono 1.0.2 release was verified with this
+   integration; older OpenVPN-only builds are not compatible. Consult the
+   [helper's guide](https://github.com/jamesmcm/vopono/blob/master/USERGUIDE.md#nordvpn).
    On Arch, the `vopono-git` package is an option. Follow the helper's service
    installation instructions; the player never runs as root and does not
    install sudo rules.
@@ -50,6 +50,18 @@ its progress window closes, until the helper or user cancellation finishes.
 Only an explicit native-dialog action can turn protection off and open normally.
 The status label means the app is inside the managed protected namespace; it is
 not a promise that the remote server is reachable at every instant.
+Settings also show the public IP returned by an HTTPS request to ipify from
+inside the protected player. The result is validated and cached in memory for
+30 seconds; no account credentials are sent. Startup announces a successful IP
+check, or warns that internet access could not be verified. A namespace alone
+does not produce a successful-connection notification.
+
+Cancellation revokes a private launch-permission file before calling the
+daemon's application stop API. A delayed daemon request cannot start the viewing
+process after that file is revoked. Recovery to normal internet is refused
+unless the helper client has stopped and its uniquely identified application is
+absent. Other applications already sharing the namespace are left running. Literal dollar
+signs are escaped for vopono's environment-expansion stage before argv parsing.
 
 External-player reuse is disabled during protected sessions. VLC also receives
 `--no-one-instance` after custom arguments, preventing a handoff to an already
@@ -64,7 +76,8 @@ A separate main-owned `linux-vpn.json` under Electron userData stores only the
 server prefix, configured flag and enable preference. Writes use a mode0600
 sibling followed by atomic rename. Malformed existing settings fail closed;
 they do not silently become a disabled VPN. A missing file starts disabled.
-Tokens go through a named `token` IPC field for shared-log redaction, then the
+Tokens enter the exposed preload bridge as a keyed `token` object, preserving
+shared-log redaction before tracing, and then pass to the
 one-time helper's environment. They never enter command arguments, settings
 exports, errors, status responses or application logging. The input clears after
 setup, including failed setup. Never use a real token in automated tests.

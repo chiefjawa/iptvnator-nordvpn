@@ -14,6 +14,7 @@ import type {
     LinuxVpnStatus,
 } from '@iptvnator/shared/interfaces';
 import { daemonIsReady, runVpnHelper } from './linux-vpn-helper';
+import { getVpnPublicIp } from './linux-vpn-egress';
 import {
     normalizeVpnConfig,
     validVpnServer,
@@ -59,6 +60,7 @@ export async function getLinuxVpnStatus(): Promise<LinuxVpnStatus> {
         connected: protectedVpnSession(),
     };
     if (!result.supported) return result;
+    if (result.connected) result.publicIp = await getVpnPublicIp();
     try {
         await runVpnHelper(['--version']);
         result.helperAvailable = true;

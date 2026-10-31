@@ -129,5 +129,16 @@ import {
             }
             expect(vpnNamespaceName('/different/profile')).not.toBe(namespace);
         });
+        it('escapes literal dollars before the helper expands its command string', () => {
+            const args = vpnLaunchArguments(
+                'canada',
+                namespace,
+                ['/opt/$HOME/player', '${UNSET}/literal'],
+                '/private/helper.toml'
+            );
+            expect(args.at(-1)).toBe(
+                "'/opt/$$HOME/player' '$${UNSET}/literal'"
+            );
+        });
     }
 );

@@ -13,10 +13,36 @@
                     <p>{{ 'VPN.DESCRIPTION' | translate }}</p>
                     <p role="status" data-test-id="vpn-status">
                         {{
-                            (state()?.connected ? 'VPN.PROTECTED' : 'VPN.OFF')
-                                | translate
+                            (state()?.connected
+                                ? state()?.publicIp
+                                    ? 'VPN.CONNECTED'
+                                    : 'VPN.PROTECTED'
+                                : 'VPN.OFF'
+                            ) | translate
                         }}
                     </p>
+                    @if (state()?.connected) {
+                        <p>
+                            <strong>{{ 'VPN.PUBLIC_IP' | translate }}:</strong>
+                            <span data-test-id="vpn-public-ip">{{
+                                state()?.publicIp ||
+                                    ('VPN.IP_UNAVAILABLE' | translate)
+                            }}</span>
+                        </p>
+                        <p>
+                            <strong>{{ 'VPN.REGION' | translate }}:</strong>
+                            {{
+                                (state()?.server === 'canada'
+                                    ? 'VPN.CANADA'
+                                    : state()?.server === 'united_states'
+                                      ? 'VPN.USA'
+                                      : state()?.server === 'united_kingdom'
+                                        ? 'VPN.UK'
+                                        : ''
+                                ) | translate
+                            }}
+                        </p>
+                    }
                     @if (state() && !state()?.daemonAvailable) {
                         <p>{{ 'VPN.HELPER_REQUIRED' | translate }}</p>
                     }

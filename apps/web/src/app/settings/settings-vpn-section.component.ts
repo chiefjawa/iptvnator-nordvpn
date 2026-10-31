@@ -71,9 +71,9 @@ export class SettingsVpnSectionComponent {
         this.busy.set(true);
         this.error.set('');
         try {
-            const status = await window.electron.configureLinuxVpn?.(
-                this.token()
-            );
+            const status = await window.electron.configureLinuxVpn?.({
+                token: this.token(),
+            });
             if (!status) throw new Error('VPN support unavailable.');
             if (!this.destroyed) this.state.set(status);
         } catch {

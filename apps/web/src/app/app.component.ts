@@ -1,4 +1,5 @@
 import { startAppMenuActions } from './services/app-menu-actions';
+import { notifyAppVpn } from './services/app-vpn-notifications';
 import {
     Component,
     effect,
@@ -150,6 +151,18 @@ export class AppComponent implements OnInit {
         this.translate.setDefaultLang(this.DEFAULT_LANG);
 
         this.initSettings();
+        const getVpnStatus = window.electron?.getLinuxVpnStatus;
+        if (this.runtime.supportsLinuxVpn && getVpnStatus) {
+            void notifyAppVpn(
+                getVpnStatus,
+                (key, params) => this.translate.instant(key, params),
+                (text) => {
+                    void this.snackBar.open(text, undefined, {
+                        duration: 8000,
+                    });
+                }
+            );
+        }
         this.triggerAutoUpdatePlaylists();
     }
 
@@ -166,7 +179,9 @@ export class AppComponent implements OnInit {
                     // Settings are stored in IndexedDB and loaded by the settings store
                     // Only specific Electron settings (MPV/VLC paths) are sent when changed in settings component
 
-                    const resolvedLang = normalizeAppLanguage(settings.language);
+                    const resolvedLang = normalizeAppLanguage(
+                        settings.language
+                    );
                     // The switch re-renders every date with the new locale;
                     // its data is a lazy chunk that must be registered first.
                     void this.dateLocales.use(resolvedLang);

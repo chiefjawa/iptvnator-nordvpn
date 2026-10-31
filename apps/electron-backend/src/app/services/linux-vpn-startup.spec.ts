@@ -10,6 +10,7 @@ jest.mock('electron', () => ({
     BrowserWindow: jest.fn(),
 }));
 jest.mock('node:child_process', () => ({ spawn: jest.fn() }));
+jest.mock('./linux-vpn-helper', () => ({ runVpnHelper: jest.fn() }));
 jest.mock('../startup/login-shell-path', () => ({
     scheduleDeferredFixPath: jest.fn(),
     waitForLoginShellPath: jest.fn(async () => true),
@@ -30,6 +31,7 @@ import {
 import { bootstrapLinuxVpn } from './linux-vpn-startup';
 import { readFileSync, rmSync } from 'node:fs';
 import { spawn } from 'node:child_process';
+import { runVpnHelper } from './linux-vpn-helper';
 import { EventEmitter } from 'node:events';
 import { vpnNamespaceName } from './linux-vpn-policy';
 import {
@@ -162,6 +164,76 @@ import {
             expect(start).not.toHaveBeenCalled();
             expect(app.relaunch).toHaveBeenCalledTimes(1);
             expect(app.exit).toHaveBeenCalledWith(0);
+        });
+        it('cancels a pending launch through the daemon before exiting', async () => {
+            jest.mocked(getLinuxVpnStatus).mockResolvedValue({
+                enabled: true,
+                configured: true,
+                server: 'canada',
+                supported: true,
+                helperAvailable: true,
+                daemonAvailable: true,
+                connected: false,
+            });
+            const child = Object.assign(new EventEmitter(), {
+                stdout: new EventEmitter(),
+                kill: jest.fn(),
+            });
+            const progress = {
+                loadURL: jest.fn(async () => undefined),
+                on: jest.fn(),
+                destroy: jest.fn(),
+                removeAllListeners: jest.fn(),
+            };
+            jest.mocked(BrowserWindow).mockImplementation(
+                () => progress as unknown as BrowserWindow
+            );
+            jest.mocked(spawn).mockReturnValue(
+                child as unknown as ReturnType<typeof spawn>
+            );
+            jest.mocked(runVpnHelper).mockImplementation(async (args) => {
+                if (args[0] === 'stop') child.emit('close', 0);
+                return args[0] === 'list'
+                    ? JSON.stringify({
+                          namespaces: [
+                              {
+                                  id: `${vpnNamespaceName('/tmp/test-profile')}-u${process.getuid?.()}`,
+                                  applications: child.listenerCount('close')
+                                      ? [
+                                            {
+                                                pid: 123,
+                                                argv: [
+                                                    '/bin/sh',
+                                                    String(
+                                                        jest
+                                                            .mocked(app.setPath)
+                                                            .mock.calls.at(
+                                                                -1
+                                                            )?.[1]
+                                                    ) + '/launch.sh',
+                                                ],
+                                            },
+                                        ]
+                                      : [],
+                              },
+                          ],
+                      })
+                    : '{"success":true}';
+            });
+            bootstrapLinuxVpn(jest.fn());
+            await new Promise((resolve) => setImmediate(resolve));
+            progress.on.mock.calls.find(([event]) => event === 'closed')?.[1]();
+            await task;
+            expect(child.kill).not.toHaveBeenCalled();
+            expect(runVpnHelper).toHaveBeenCalledWith([
+                'stop',
+                'application',
+                '123',
+                '--json',
+            ]);
+            expect(app.exit).toHaveBeenCalledWith(0);
+            expect(app.relaunch).not.toHaveBeenCalled();
+            expect(dialog.showMessageBox).not.toHaveBeenCalled();
         });
         it('starts directly when protection is off or the real managed namespace is verified', () => {
             const start = jest.fn();
