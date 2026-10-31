@@ -88,10 +88,12 @@ import {
             expect(JSON.parse(output)).toEqual(values);
         });
         it('pins the provider/protocol and never disables the helper kill switch', () => {
-            const args = vpnLaunchArguments('canada', namespace, [
-                '/opt/My Player/player',
-                '--example',
-            ]);
+            const args = vpnLaunchArguments(
+                'canada',
+                namespace,
+                ['/opt/My Player/player', '--example'],
+                '/private/helper.toml'
+            );
             expect(args).toEqual([
                 'exec',
                 '--provider',
@@ -102,6 +104,8 @@ import {
                 'canada',
                 '--custom-netns-name',
                 namespace,
+                '--vopono-config',
+                '/private/helper.toml',
                 '--json',
                 "'/opt/My Player/player' '--example'",
             ]);
@@ -114,7 +118,14 @@ import {
                 'foo bar',
             ]) {
                 expect(validVpnServer(bad)).toBe(false);
-                expect(() => vpnLaunchArguments(bad, namespace, [])).toThrow();
+                expect(() =>
+                    vpnLaunchArguments(
+                        bad,
+                        namespace,
+                        [],
+                        '/private/helper.toml'
+                    )
+                ).toThrow();
             }
             expect(vpnNamespaceName('/different/profile')).not.toBe(namespace);
         });

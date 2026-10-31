@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog } from 'electron';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -10,6 +10,10 @@ import {
     getLinuxVpnStatus,
 } from './linux-vpn.service';
 import { vpnLaunchArguments, vpnNamespaceName } from './linux-vpn-policy';
+import {
+    scheduleDeferredFixPath,
+    waitForLoginShellPath,
+} from '../startup/login-shell-path';
 
 /** Nothing loads the viewing UI or contacts a playlist before this gate. */
 export function bootstrapLinuxVpn(startPlayer: () => void): void {
@@ -37,13 +41,20 @@ export function bootstrapLinuxVpn(startPlayer: () => void): void {
     process.once('exit', () =>
         rmSync(sessionData, { recursive: true, force: true })
     );
-    void app.whenReady().then(() => launchProtectedPlayer());
+    // This process owns the helper until it exits, even after its only window
+    // closes on success or before a native recovery dialog is displayed.
+    app.on('window-all-closed', () => undefined);
+    const helperConfig = join(sessionData, 'vopono.toml');
+    writeFileSync(helperConfig, 'no_killswitch = false\n', { mode: 0o600 });
+    void app.whenReady().then(() => launchProtectedPlayer(helperConfig));
 }
 
-async function launchProtectedPlayer(): Promise<void> {
+async function launchProtectedPlayer(helperConfig: string): Promise<void> {
     let progress: BrowserWindow | undefined;
     try {
         if (process.env.VOPONO_NS) throw new Error('Unverified VPN namespace.');
+        scheduleDeferredFixPath();
+        await waitForLoginShellPath();
         const status = await getLinuxVpnStatus();
         if (!status.configured || !status.daemonAvailable)
             throw new Error('VPN helper not ready.');
@@ -73,10 +84,12 @@ async function launchProtectedPlayer(): Promise<void> {
         );
         const child = spawn(
             'vopono',
-            vpnLaunchArguments(status.server, namespace, [
-                process.execPath,
-                ...process.argv.slice(1),
-            ]),
+            vpnLaunchArguments(
+                status.server,
+                namespace,
+                [process.execPath, ...process.argv.slice(1)],
+                helperConfig
+            ),
             { env, stdio: ['ignore', 'pipe', 'ignore'] }
         );
         let launched = false;

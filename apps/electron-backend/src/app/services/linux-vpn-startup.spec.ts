@@ -4,9 +4,15 @@ jest.mock('electron', () => ({
         exit: jest.fn(),
         getPath: jest.fn(),
         relaunch: jest.fn(),
+        on: jest.fn(),
     },
     dialog: { showMessageBox: jest.fn() },
     BrowserWindow: jest.fn(),
+}));
+jest.mock('node:child_process', () => ({ spawn: jest.fn() }));
+jest.mock('../startup/login-shell-path', () => ({
+    scheduleDeferredFixPath: jest.fn(),
+    waitForLoginShellPath: jest.fn(async () => true),
 }));
 jest.mock('./linux-vpn.service', () => ({
     readVpnConfig: jest.fn(),
@@ -22,7 +28,14 @@ import {
     writeVpnConfig,
 } from './linux-vpn.service';
 import { bootstrapLinuxVpn } from './linux-vpn-startup';
-import { rmSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { vpnNamespaceName } from './linux-vpn-policy';
+import {
+    scheduleDeferredFixPath,
+    waitForLoginShellPath,
+} from '../startup/login-shell-path';
 
 (process.platform === 'linux' ? describe : describe.skip)(
     'VPN startup gate',
@@ -71,6 +84,67 @@ import { rmSync } from 'node:fs';
             expect(BrowserWindow).not.toHaveBeenCalled();
             expect(app.exit).toHaveBeenCalledWith(1);
             expect(writeVpnConfig).not.toHaveBeenCalled();
+            expect(scheduleDeferredFixPath).toHaveBeenCalledTimes(1);
+            expect(waitForLoginShellPath).toHaveBeenCalledTimes(1);
+            expect(
+                jest.mocked(waitForLoginShellPath).mock.invocationCallOrder[0]
+            ).toBeLessThan(
+                jest.mocked(getLinuxVpnStatus).mock.invocationCallOrder[0]
+            );
+        });
+        it('keeps the controller alive after success and ignores user helper defaults', async () => {
+            jest.mocked(getLinuxVpnStatus).mockResolvedValue({
+                enabled: true,
+                configured: true,
+                server: 'canada',
+                supported: true,
+                helperAvailable: true,
+                daemonAvailable: true,
+                connected: false,
+            });
+            const child = Object.assign(new EventEmitter(), {
+                stdout: new EventEmitter(),
+                kill: jest.fn(),
+            });
+            const progress = {
+                loadURL: jest.fn(async () => undefined),
+                on: jest.fn(),
+                destroy: jest.fn(),
+            };
+            jest.mocked(BrowserWindow).mockImplementation(
+                () => progress as unknown as BrowserWindow
+            );
+            jest.mocked(spawn).mockImplementation(() => {
+                setImmediate(() =>
+                    child.stdout.emit(
+                        'data',
+                        Buffer.from(
+                            JSON.stringify({
+                                version: 1,
+                                event: 'launched',
+                                pid: 123,
+                                namespace: `${vpnNamespaceName('/tmp/test-profile')}-u${process.getuid?.()}`,
+                            }) + '\n'
+                        )
+                    )
+                );
+                return child as unknown as ReturnType<typeof spawn>;
+            });
+            bootstrapLinuxVpn(jest.fn());
+            await task;
+            expect(app.on).toHaveBeenCalledWith(
+                'window-all-closed',
+                expect.any(Function)
+            );
+            expect(progress.destroy).toHaveBeenCalledTimes(1);
+            expect(app.exit).not.toHaveBeenCalled();
+            const args = jest.mocked(spawn).mock.calls[0][1] as string[];
+            const helperConfig = args[args.indexOf('--vopono-config') + 1];
+            expect(readFileSync(helperConfig, 'utf8')).toBe(
+                'no_killswitch = false\n'
+            );
+            child.emit('close', 0);
+            expect(app.exit).toHaveBeenCalledWith(0);
         });
         it('requires an explicit user choice before disabling protection and opening normally', async () => {
             jest.mocked(dialog.showMessageBox).mockResolvedValue({

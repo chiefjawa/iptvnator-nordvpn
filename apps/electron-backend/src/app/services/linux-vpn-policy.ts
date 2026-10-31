@@ -73,7 +73,8 @@ export function quoteVpnCommand(args: string[]): string {
 export function vpnLaunchArguments(
     server: string,
     namespace: string,
-    args: string[]
+    args: string[],
+    helperConfig: string
 ): string[] {
     if (!validVpnServer(server))
         throw new Error('Invalid VPN server selection.');
@@ -87,6 +88,8 @@ export function vpnLaunchArguments(
         server,
         '--custom-netns-name',
         namespace,
+        '--vopono-config',
+        helperConfig,
         '--json',
         quoteVpnCommand(args),
     ];

@@ -100,19 +100,19 @@ import {
             expect(status.daemonAvailable).toBe(false);
             expect(status.connected).toBe(false);
         });
+        it('discards unexpected secret fields at the persistence boundary', () => {
+            const supplied = Object.assign(
+                { enabled: false, configured: true, server: 'canada' },
+                { token: 'SYNTHETIC_EXTRA_SECRET' }
+            );
+            writeVpnConfig(supplied);
+            const file = readFileSync(vpnConfigPath(), 'utf8');
+            expect(JSON.parse(file)).toEqual({
+                enabled: false,
+                configured: true,
+                server: 'canada',
+            });
+            expect(file).not.toContain('SYNTHETIC_EXTRA_SECRET');
+        });
     }
 );
-it('discards unexpected secret fields at the persistence boundary', () => {
-    const supplied = Object.assign(
-        { enabled: false, configured: true, server: 'canada' },
-        { token: 'SYNTHETIC_EXTRA_SECRET' }
-    );
-    writeVpnConfig(supplied);
-    const file = readFileSync(vpnConfigPath(), 'utf8');
-    expect(JSON.parse(file)).toEqual({
-        enabled: false,
-        configured: true,
-        server: 'canada',
-    });
-    expect(file).not.toContain('SYNTHETIC_EXTRA_SECRET');
-});

@@ -43,6 +43,10 @@ The protected child verifies its actual kernel network namespace inode against
 the named namespace and the original host inode. An environment variable alone
 never makes the UI report protection. The helper's default WireGuard kill switch
 remains enabled; there is no normal-network fallback on a connection failure.
+Each launch supplies an app-owned helper TOML file with `no_killswitch = false`,
+so user-wide vopono defaults cannot disable this protection. The controller
+resolves the login-shell PATH before finding the helper and stays alive after
+its progress window closes, until the helper or user cancellation finishes.
 Only an explicit native-dialog action can turn protection off and open normally.
 The status label means the app is inside the managed protected namespace; it is
 not a promise that the remote server is reachable at every instant.

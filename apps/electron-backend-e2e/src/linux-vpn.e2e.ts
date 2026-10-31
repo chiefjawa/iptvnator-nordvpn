@@ -74,6 +74,9 @@ test.describe('Linux app-only VPN', () => {
                 await expect(
                     player.mainWindow.getByTestId('vpn-connect')
                 ).toBeEnabled();
+                await expect(
+                    player.mainWindow.locator('.settings-snackbar')
+                ).toHaveCount(0);
                 await player.mainWindow
                     .getByTestId('vpn-settings')
                     .screenshot({ path: join(artifacts, theme + '.png') });
