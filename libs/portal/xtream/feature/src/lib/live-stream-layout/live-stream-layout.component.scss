@@ -13,6 +13,28 @@
     @include mat.form-field-density(-5);
 }
 
+// Near the sidebar's 250px floor, with the categories rail folded, the
+// header holds up to five icon buttons and the category dropdown got none
+// of the row: its title vanished and, with "show playing channel" present,
+// the buttons ran past the border. Denser buttons and no count pill leave
+// the title room to show and ellipsize.
+// (`.sidebar` prefix: the shared header rules are scoped under it.)
+@container (max-width: 300px) {
+    .sidebar .sidebar-header {
+        // Inherited, so it also sizes the multiview entry component's button.
+        --mat-icon-button-state-layer-size: 32px;
+        gap: 4px;
+
+        .category-dropdown {
+            margin-left: -4px;
+        }
+
+        .category-dropdown .category-count {
+            display: none;
+        }
+    }
+}
+
 // ─── Side-panel channel list ───────────────────────────────────────────────
 .sidebar {
     app-portal-channels-list {

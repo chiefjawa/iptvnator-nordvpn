@@ -9,6 +9,7 @@ import {
     untracked,
     viewChildren,
 } from '@angular/core';
+import { MatButtonModule } from '@angular/material/button';
 import { MatIcon } from '@angular/material/icon';
 import { RouterLink } from '@angular/router';
 import { TranslatePipe } from '@ngx-translate/core';
@@ -61,6 +62,7 @@ interface LiveStreamLike {
     selector: 'app-xtream-multiview',
     changeDetection: ChangeDetectionStrategy.OnPush,
     imports: [
+        MatButtonModule,
         MatIcon,
         MultiviewChannelPickerComponent,
         MultiviewTileComponent,

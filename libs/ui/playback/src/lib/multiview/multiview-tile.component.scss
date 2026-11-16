@@ -9,6 +9,7 @@
     outline: 2px solid transparent;
     outline-offset: -2px;
     transition: outline-color 120ms ease;
+    container: multiview-tile / inline-size;
 }
 
 :host(.multiview-tile--focused) {
@@ -60,6 +61,15 @@
     opacity: 1;
 }
 
+// While the bar is hidden its buttons must not take a tap either: on a
+// touch screen the first tap on a tile's corner removed it unseen. Keyboard
+// focus still reaches them (focus-within shows the bar).
+:host(:hover) .multiview-tile__action,
+:host(:focus-within) .multiview-tile__action,
+:host(.multiview-tile--focused) .multiview-tile__action {
+    pointer-events: auto;
+}
+
 .multiview-tile__logo {
     width: 28px;
     height: 28px;
@@ -97,7 +107,7 @@
     color: inherit;
     background: rgba(255, 255, 255, 0.14);
     cursor: pointer;
-    pointer-events: auto;
+    pointer-events: none;
 
     &:hover {
         background: rgba(255, 255, 255, 0.28);
@@ -121,7 +131,10 @@
     bottom: 12px;
     max-width: calc(100% - 24px);
     padding: 4px 10px;
-    border-radius: 999px;
+    // A pill on one line; a rounded rectangle, not a lozenge, when a long
+    // notice wraps in a small tile.
+    border-radius: 12px;
+    overflow-wrap: anywhere;
     color: #fff;
     background: rgba(0, 0, 0, 0.72);
     font-size: 12px;
@@ -130,4 +143,18 @@
 
 .multiview-tile__notice--problem {
     background: rgba(160, 30, 30, 0.9);
+}
+
+// A quarter of a narrow pane: the logo and sound icon give their room to the
+// title so the two actions stay inside the tile.
+@container multiview-tile (max-width: 199px) {
+    .multiview-tile__bar {
+        gap: 4px;
+        padding-inline: 8px 6px;
+    }
+
+    .multiview-tile__logo,
+    .multiview-tile__sound {
+        display: none;
+    }
 }

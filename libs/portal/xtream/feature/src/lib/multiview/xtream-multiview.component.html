@@ -16,23 +16,27 @@
         data-test-id="multiview-mode"
     >
         <mat-icon aria-hidden="true">{{ sharing() ? 'hub' : 'lan' }}</mat-icon>
-        {{
+        <span class="multiview__mode-label">{{
             (sharing() ? 'MULTIVIEW.MODE_SHARED' : 'MULTIVIEW.MODE_DIRECT')
                 | translate
-        }}
+        }}</span>
     </span>
 
     <span class="multiview__spacer"></span>
 
     <button
         type="button"
+        mat-flat-button
         class="multiview__add"
         data-test-id="multiview-add-channel"
         [disabled]="!canAdd()"
+        [title]="'MULTIVIEW.ADD_CHANNEL' | translate"
         (click)="openPicker('new')"
     >
         <mat-icon aria-hidden="true">add</mat-icon>
-        {{ 'MULTIVIEW.ADD_CHANNEL' | translate }}
+        <span class="multiview__add-label">{{
+            'MULTIVIEW.ADD_CHANNEL' | translate
+        }}</span>
     </button>
 </header>
 
@@ -56,6 +60,7 @@
         }
         <button
             type="button"
+            mat-flat-button
             class="multiview__add"
             (click)="openPicker('new')"
         >

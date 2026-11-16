@@ -29,6 +29,16 @@ const PLAYLIST_ROUTE_PATH = 'xtreams/:id';
             <mat-icon>grid_view</mat-icon>
         </button>
     `,
+    // The host page's `.sidebar-header button { app-region: no-drag }` does
+    // not reach into this component, and the header is a window-drag region:
+    // without its own exemption a click here moved the window instead.
+    styles: `
+        :host {
+            display: inline-flex;
+            flex: none;
+            app-region: no-drag;
+        }
+    `,
 })
 export class MultiviewEntryButtonComponent {
     /** Translated by the host, which owns the page's translation setup. */

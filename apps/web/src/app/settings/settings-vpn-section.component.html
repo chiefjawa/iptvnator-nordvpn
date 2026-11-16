@@ -5,7 +5,13 @@
         </div>
         <div class="settings-card">
             @if (!canRestart()) {
-                <p id="vpn-save-first">{{ 'VPN.SAVE_FIRST' | translate }}</p>
+                <div class="setting-item">
+                    <div class="setting-item__meta">
+                        <p id="vpn-save-first">
+                            {{ 'VPN.SAVE_FIRST' | translate }}
+                        </p>
+                    </div>
+                </div>
             }
             <div class="setting-item" data-setting-id="app-vpn-connection">
                 <div class="setting-item__meta">
@@ -57,8 +63,9 @@
                     <h4 id="vpn-token-label">{{ 'VPN.TOKEN' | translate }}</h4>
                     <p>{{ 'VPN.TOKEN_DESCRIPTION' | translate }}</p>
                 </div>
-                <div class="setting-item__control">
+                <div class="setting-item__control setting-item__control--stack">
                     <mat-form-field
+                        class="settings-text-field"
                         appearance="outline"
                         subscriptSizing="dynamic"
                     >
@@ -105,6 +112,7 @@
                 </div>
                 <div class="setting-item__control">
                     <mat-form-field
+                        class="settings-select"
                         appearance="outline"
                         subscriptSizing="dynamic"
                     >
