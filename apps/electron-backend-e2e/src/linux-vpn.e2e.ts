@@ -9,6 +9,7 @@ import {
     openSettingsSection,
     saveSettings,
     electronMainPath,
+    workspaceRoot,
 } from './electron-test-fixtures';
 
 test.describe('Linux app-only VPN', () => {
@@ -104,8 +105,10 @@ test.describe('Linux app-only VPN', () => {
             });
             expect(saved).not.toContain('SYNTHETIC_TEST_TOKEN');
             await expect(status).toHaveText('App VPN is off');
+            // The workspace's dist, not the cwd's: Nx runs the suite from
+            // the e2e project, which put these inside the source tree.
             const artifacts = join(
-                process.cwd(),
+                workspaceRoot,
                 'dist/test-artifacts/linux-vpn'
             );
             mkdirSync(artifacts, { recursive: true });
