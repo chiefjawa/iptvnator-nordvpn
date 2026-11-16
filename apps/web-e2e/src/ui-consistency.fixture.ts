@@ -104,6 +104,79 @@ export async function expectCollectionFits(page: Page) {
     expect(problems).toEqual([]);
 }
 
+type Box = { x: number; y: number; width: number; height: number };
+
+async function visibleBox(locator: Locator): Promise<Box | null> {
+    if (!(await locator.isVisible())) return null;
+    const box = await locator.boundingBox();
+    return box && box.width > 0 && box.height > 0 ? box : null;
+}
+
+/** Every visible match of `children` lies inside `container`'s box: a
+ * child painted past its bar ends up under the next control. */
+export async function expectInside(
+    container: Locator,
+    children: Locator,
+    label: string
+) {
+    // Rails fold and the header's controls slide with a short transition
+    // after a resize; measure the settled layout.
+    await expect
+        .poll(async () => {
+            const read = async () =>
+                JSON.stringify(
+                    await children.evaluateAll((elements) =>
+                        elements.map((e) => e.getBoundingClientRect().x)
+                    )
+                ) + JSON.stringify(await container.boundingBox());
+            const before = await read();
+            await container.evaluate(
+                () => new Promise((resolve) => setTimeout(resolve, 120))
+            );
+            return before === (await read());
+        })
+        .toBe(true);
+    const bounds = await visibleBox(container);
+    expect(bounds, `${label}: container has no box`).not.toBeNull();
+    const { x, y, width, height } = bounds as Box;
+    for (const child of await children.all()) {
+        const box = await visibleBox(child);
+        if (!box) continue;
+        const name = `${label}: ${(await child.getAttribute('class')) ?? 'child'}`;
+        expect
+            .soft(box.x, `${name} starts before`)
+            .toBeGreaterThanOrEqual(x - 1);
+        expect
+            .soft(box.x + box.width, `${name} ends past`)
+            .toBeLessThanOrEqual(x + width + 1);
+        expect
+            .soft(box.y, `${name} starts above`)
+            .toBeGreaterThanOrEqual(y - 1);
+        expect
+            .soft(box.y + box.height, `${name} ends below`)
+            .toBeLessThanOrEqual(y + height + 1);
+    }
+}
+
+/** No two visible boxes among `items` overlap by more than a pixel. */
+export async function expectNoOverlap(items: Locator[], label: string) {
+    const boxes = await Promise.all(items.map(visibleBox));
+    for (let i = 0; i < boxes.length; i++) {
+        for (let j = i + 1; j < boxes.length; j++) {
+            const a = boxes[i];
+            const b = boxes[j];
+            if (!a || !b) continue;
+            const w =
+                Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+            const h =
+                Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+            expect
+                .soft(w > 1 && h > 1, `${label}: items ${i} and ${j} overlap`)
+                .toBe(false);
+        }
+    }
+}
+
 export async function selectUiLanguage(
     page: Page,
     language: 'en' | 'de' | 'ru' | 'ar'

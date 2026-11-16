@@ -66,6 +66,13 @@
     align-items: center;
     gap: 8px;
     padding: 0 12px;
+    // The chips below query the field's own width: how much room the field
+    // gets depends on the route's header buttons, not only on the window.
+    container: workspace-search / inline-size;
+    // Last line of defence: nothing inside the field may paint over the
+    // header buttons beside it (the Ctrl+K badge once slid under the
+    // keyboard button between 641px and ~1000px).
+    overflow: clip;
     transition:
         border-color 0.15s ease,
         background-color 0.15s ease,
@@ -159,6 +166,9 @@
     }
 
     .search-chip__label {
+        // A flex item: without this it keeps its text width and the chip
+        // clips it instead of ending it in an ellipsis.
+        min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -178,8 +188,16 @@
         );
     }
 
+    // An <input> carries an intrinsic min-width from its `size`, and
+    // `min-width: auto` on a flex item honours it, so the input refused to
+    // shrink and pushed the Ctrl+K trigger out of the field and under the
+    // buttons beside it. With a real basis it shares a tight field with the
+    // scope chip instead of leaving the chip to shrink alone.
     input {
-        flex: 1;
+        flex: 1 1 120px;
+        min-width: 0;
+        // A shrunk field cuts the placeholder mid-word otherwise.
+        text-overflow: ellipsis;
         border: none;
         outline: none;
         background: transparent;
@@ -247,6 +265,18 @@
         &:focus-visible {
             border-color: var(--app-focus-ring);
             @include focus-ring.focus-ring-declarations($offset: 1px);
+        }
+    }
+}
+
+// Below this the chips could only keep a letter or two beside a usable
+// input, so they go, as they do at the phone breakpoint. Clearing a
+// category filter stays possible from the context panel.
+@container workspace-search (max-width: 279px) {
+    .search-field {
+        .search-chip--status,
+        .search-chip--scope {
+            display: none;
         }
     }
 }
@@ -450,14 +480,6 @@
         .search-chip--status,
         .search-chip--scope {
             display: none;
-        }
-
-        // An <input> carries an intrinsic min-width from its `size`, and
-        // `min-width: auto` on a flex item honours it — so the input refused
-        // to shrink and pushed the trigger out of the field and onto the
-        // buttons beside it.
-        input {
-            min-width: 0;
         }
 
         // This button is the only pointer-driven way into the command
