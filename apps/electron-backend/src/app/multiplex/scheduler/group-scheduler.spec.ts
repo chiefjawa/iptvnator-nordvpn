@@ -2,6 +2,7 @@ import { createFakeProvider, FakeProvider } from '../testing/fake-provider';
 import { SYNTHETIC_VIDEO_PID } from '../testing/synthetic-ts';
 import { parseTsPacket, timestampDelta } from '../ts/ts-packet';
 import { readPesTimestamps } from '../ts/ts-pes';
+import { TileSplicer, VisitSummary } from '../splicer/tile-splicer';
 import { GroupScheduler } from './group-scheduler';
 import { TileSink, TileStatus } from './scheduler-types';
 
@@ -20,7 +21,11 @@ class FakePlayer implements TileSink {
     gaps = 0;
     lowestBufferedMs = Number.POSITIVE_INFINITY;
 
-    constructor(private readonly provider: FakeProvider) {}
+    constructor(
+        private readonly provider: FakeProvider,
+        /** Time from the first data to the first played frame. */
+        private readonly startupMs = 0
+    ) {}
 
     write(packets: Buffer[]): void {
         for (const packet of packets) {
@@ -57,7 +62,10 @@ class FakePlayer implements TileSink {
         if (this.firstAtMs === null) {
             return 0;
         }
-        const played = this.provider.clock.now() - this.firstAtMs;
+        const played = Math.max(
+            0,
+            this.provider.clock.now() - this.firstAtMs - this.startupMs
+        );
         return this.receivedMs - played;
     }
 
@@ -75,9 +83,26 @@ class FakePlayer implements TileSink {
     }
 }
 
+/**
+ * Like a real single-connection provider: ~25 s of burst at 12x on a slow
+ * (1 s) open with 2 s GOPs, on a slower clock to keep timing noise small.
+ */
+const REAL_LIKE_PROVIDER = {
+    speed: 10,
+    depthSec: 25,
+    burstSpeed: 12,
+    connectMs: 1000,
+    gopFrames: 50,
+    burstFromKeyframeAfter: true,
+};
+/** A player shows its first frame about a second after data arrives. */
+const PLAYER_STARTUP_MS = 1000;
+
 function setup(
     tileCount: number,
-    options: Parameters<typeof createFakeProvider>[0] = {}
+    options: Parameters<typeof createFakeProvider>[0] = {},
+    reportProgress = false,
+    startupMs = 0
 ) {
     const provider = createFakeProvider(options);
     const statuses: TileStatus[][] = [];
@@ -87,7 +112,7 @@ function setup(
         onStatus: (tiles) => statuses.push(tiles),
     });
     const players = Array.from({ length: tileCount }, (_, index) => {
-        const player = new FakePlayer(provider);
+        const player = new FakePlayer(provider, startupMs);
         scheduler.setTile(
             `tile-${index}`,
             { url: `http://provider.invalid/live/u/p/${index + 1}.ts` },
@@ -101,7 +126,17 @@ function setup(
         const end = provider.clock.now() + simulatedMs;
         while (provider.clock.now() < end) {
             await provider.clock.sleep(500);
-            players.forEach((player) => player.sample());
+            players.forEach((player, index) => {
+                player.sample();
+                if (reportProgress && player.started) {
+                    // What the renderer sends: the tile plays what it has.
+                    scheduler.reportProgress(`tile-${index}`, {
+                        bufferedAheadSec: Math.max(0, player.bufferedMs()) / 1000,
+                        playing: player.bufferedMs() > 0,
+                        focused: index === 0,
+                    });
+                }
+            });
         }
     };
 
@@ -152,6 +187,63 @@ describe('GroupScheduler', () => {
             expect(player.gaps).toBe(0);
             expect(player.lowestBufferedMs).toBeGreaterThan(1000);
         }
+    });
+
+    describe('cold start on a deep-burst provider', () => {
+        /** Every visit after a tile's first, which must stitch onto it. */
+        let revisits: VisitSummary[];
+
+        beforeEach(() => {
+            revisits = [];
+            const visited = new WeakSet<TileSplicer>();
+            const endVisit = TileSplicer.prototype.endVisit;
+            jest.spyOn(TileSplicer.prototype, 'endVisit').mockImplementation(
+                function (this: TileSplicer) {
+                    const summary = endVisit.call(this);
+                    if (visited.has(this)) {
+                        revisits.push(summary);
+                    }
+                    visited.add(this);
+                    return summary;
+                }
+            );
+        });
+
+        afterEach(() => jest.restoreAllMocks());
+
+        it.each([2, 3, 4])(
+            'never skips ahead in the first minute with %i tiles',
+            async (tileCount) => {
+                const { provider, scheduler, players, statuses, run } = setup(
+                    tileCount,
+                    REAL_LIKE_PROVIDER,
+                    true,
+                    PLAYER_STARTUP_MS
+                );
+
+                await run(60000);
+                await scheduler.stop();
+
+                expect(provider.stats()).toMatchObject({ peak: 1, refused: 0 });
+                expect(revisits.length).toBeGreaterThan(tileCount);
+                expect(revisits.filter((visit) => visit.skippedMs > 0)).toEqual(
+                    []
+                );
+                expect(revisits.some((visit) => visit.restart)).toBe(false);
+                // Margin against a slower open or a late player: every
+                // revisit starts at least one GOP before where the tile is.
+                expect(
+                    Math.min(...revisits.map((visit) => visit.overlapMs))
+                ).toBeGreaterThanOrEqual(2000);
+                expect(
+                    statuses.flat().filter((tile) => tile.skippedMs > 0)
+                ).toEqual([]);
+                for (const player of players) {
+                    expect(player.started).toBe(true);
+                    expect(player.gaps).toBe(0);
+                }
+            }
+        );
     });
 
     it('waits and retries after a refusal instead of opening a second connection', async () => {

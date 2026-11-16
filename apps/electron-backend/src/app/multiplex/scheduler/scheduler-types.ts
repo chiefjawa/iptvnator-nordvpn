@@ -90,6 +90,11 @@ export interface SchedulerConfig {
     /** Reserve below which a tile may interrupt a burst. */
     readonly criticalSec: number;
     readonly focusedCriticalSec: number;
+    /**
+     * A tile with nothing to show yet interrupts a burst only once the visit
+     * is this old; until then the visit runs to the live edge.
+     */
+    readonly coldPreemptAfterMs: number;
     /** A tile asks for a visit below this share of its full reserve. */
     readonly lowWaterFraction: number;
     readonly lowWaterFloorSec: number;
@@ -106,6 +111,7 @@ export const DEFAULT_SCHEDULER_CONFIG: SchedulerConfig = {
     minNewMediaMs: 12000,
     criticalSec: 3,
     focusedCriticalSec: 6,
+    coldPreemptAfterMs: 6000,
     lowWaterFraction: 0.5,
     lowWaterFloorSec: 6,
     backoffBaseMs: 500,

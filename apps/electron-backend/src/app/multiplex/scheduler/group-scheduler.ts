@@ -290,6 +290,7 @@ export class GroupScheduler {
         for (const tile of this.tiles.values()) {
             if (tile !== current && tile.retryAtMs <= now) {
                 waiting.push({
+                    started: tile.reserve.started,
                     reserveSec: tile.reserve.reserveSec(now),
                     fullSec: tile.reserve.fullSec,
                     focused: tile.reserve.focused,

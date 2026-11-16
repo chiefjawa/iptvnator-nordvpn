@@ -7,6 +7,14 @@
  * on as soon as another tile has run low. During the burst only a tile that
  * is about to run dry may interrupt, and not before the current tile has
  * banked enough to survive its own wait.
+ *
+ * A tile that shows nothing yet cannot run dry, so it does not interrupt a
+ * burst early. Cutting a burst short leaves the visited tile behind the live
+ * edge by the media it did not take, which is time it can no longer wait for
+ * its next visit: the following connection would start past its last frame,
+ * and the content in between would be skipped. Letting every first visit run
+ * to the live edge gives each tile the provider's whole burst depth of
+ * headroom before the rotation tightens.
  */
 
 import { SchedulerConfig } from './scheduler-types';
@@ -22,6 +30,8 @@ export interface VisitStats {
 }
 
 export interface WaitingTile {
+    /** False until the tile received any media. */
+    readonly started: boolean;
     readonly reserveSec: number;
     /** Its full reserve, which sets the level it asks for a visit at. */
     readonly fullSec: number;
@@ -53,7 +63,9 @@ export function decideVisit(
     const banked = stats.newMediaMs >= config.minNewMediaMs;
     const needier = others.some(
         (tile) =>
-            isCritical(tile, config) && tile.reserveSec < stats.reserveSec
+            (tile.started || stats.ageMs >= config.coldPreemptAfterMs) &&
+            isCritical(tile, config) &&
+            tile.reserveSec < stats.reserveSec
     );
     return banked && needier ? 'preempt' : 'continue';
 }

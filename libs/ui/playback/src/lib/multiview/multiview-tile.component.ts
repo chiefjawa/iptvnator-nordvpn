@@ -115,6 +115,9 @@ export class MultiviewTileComponent implements OnDestroy {
 
     readonly noticeParams = computed(() => ({
         status: this.status()?.httpStatus ?? '',
+        // How much was missed, so a one-off skip of a second or two reads as
+        // what it is rather than as a failure.
+        seconds: Math.max(1, Math.round((this.status()?.skippedMs ?? 0) / 1000)),
     }));
 
     constructor() {

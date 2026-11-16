@@ -1124,7 +1124,7 @@
         "STATE_CONNECTING": "Connecting",
         "STATE_BUFFERING": "Buffering",
         "STATE_WAITING_TURN": "Waiting for its turn",
-        "STATE_SKIPPED": "Skipped ahead",
+        "STATE_SKIPPED": "Skipped {{seconds}} s to keep up",
         "STATE_ERROR": "Connection refused ({{status}})",
         "STATE_ERROR_GENERIC": "Playback failed",
         "STATE_UNSUPPORTED": "This stream cannot share a connection"

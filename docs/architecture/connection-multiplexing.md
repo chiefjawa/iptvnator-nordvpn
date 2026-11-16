@@ -13,6 +13,20 @@ burst, plays from that reserve, and gives the connection to the tile with the
 least media left. A tile can never hold more than its distance behind the live
 edge, so once delivery falls to real time the tile is full.
 
+A revisit can only be stitched on while the tile's last frame is still inside
+the provider's burst window: the time since that frame was live must stay
+below the burst depth. This is a different quantity from the tile's reserve
+(media ahead of its playhead), which is what the rotation orders by. A visit
+cut short leaves the tile behind the live edge by the burst it did not take.
+That is why a tile with nothing on screen yet never interrupts a burst (only
+after `coldPreemptAfterMs` on a provider that bursts unusually long): every
+first visit runs to the live edge, so each tile starts with the full depth as
+headroom. When cold tiles could interrupt at `minNewMediaMs` (12 s of a 25 s
+burst), four tiles reached their second visit with no overlap left, and a
+slightly slower open or player start showed "skipped". The cost is a later
+first picture on the last tile: about one visit (connect + burst + 1 s) per
+tile before it.
+
 Whether a provider bursts is measurable: launch with
 `IPTVNATOR_MULTIPLEX_PROBE=1` (optionally `_CHANNEL=<title part>` and
 `_OUT=<report path>`). The probe opens one channel, reopens it after 2, 5, 10
@@ -67,5 +81,8 @@ IPC is `MULTIPLEX:*` in `connection-multiplex.interface.ts`.
 
 Unit specs sit beside each part; `testing/fake-provider.ts` is a
 single-connection server on an accelerated clock, used to assert the
-one-connection invariant for one to four tiles. There is no Electron E2E yet;
+one-connection invariant for one to four tiles. The cold-start specs configure
+it like a real deep-burst provider (25 s at 12x, 1 s open, 2 s GOPs, burst
+starting on the keyframe after the depth) and require every revisit in the
+first minute to overlap by at least one GOP, for two to four tiles. There is no Electron E2E yet;
 the feature was validated over CDP against a real provider.

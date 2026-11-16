@@ -29,6 +29,13 @@ export interface FakeProviderOptions {
     readonly depthSec?: number;
     readonly burstSpeed?: number;
     readonly connectMs?: number;
+    /** Frames between keyframes; defaults to one second. */
+    readonly gopFrames?: number;
+    /**
+     * Start the burst on the first keyframe inside the depth instead of the
+     * last one before it: up to a GOP less history, the worst case.
+     */
+    readonly burstFromKeyframeAfter?: boolean;
     /** Refuse this many opens (HTTP 403) before accepting. */
     readonly refuseFirst?: number;
 }
@@ -46,6 +53,7 @@ export function createFakeProvider(
     const depthSec = options.depthSec ?? 20;
     const burstSpeed = options.burstSpeed ?? 12;
     const connectMs = options.connectMs ?? 600;
+    const gopFrames = options.gopFrames ?? FPS;
     const origin = performance.now();
 
     const clock: MultiplexClock = {
@@ -104,7 +112,9 @@ export function createFakeProvider(
         const openedAt = clock.now();
         // Start on a keyframe, like a server cutting on segment boundaries.
         let next = Math.max(0, liveFrame() - depthSec * FPS);
-        next -= next % FPS;
+        next += options.burstFromKeyframeAfter
+            ? (gopFrames - (next % gopFrames)) % gopFrames
+            : -(next % gopFrames);
         const burstStart = next;
 
         stream.write(writer.psi());
@@ -119,6 +129,7 @@ export function createFakeProvider(
                 const frames = buildChannelSlice(writer, {
                     fromFrame: base + next,
                     frames: until - next,
+                    gopFrames,
                 });
                 stream.write(Buffer.concat(frames));
                 next = until;
