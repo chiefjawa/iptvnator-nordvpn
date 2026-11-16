@@ -70,8 +70,10 @@ export interface EpgQueueEntry {
  * match is still the last resort after the provider.
  *
  * An empty answer is cached together with the name index it was reached
- * under; once a different index is ready, `getCached` no longer returns
- * it, so a name match that became available is not hidden for the TTL.
+ * under (the one its enqueue's name lookup used); once a different index is
+ * ready, `getCached` no longer returns it, so a name match that became
+ * available is not hidden for the TTL. An empty provider answer never
+ * replaces a name match recorded while the request was on the wire.
  */
 @Injectable({ providedIn: 'root' })
 export class EpgQueueService implements OnDestroy {
@@ -104,6 +106,8 @@ export class EpgQueueService implements OnDestroy {
     private readonly epgChannelByStreamId = new Map<number, string>();
     private readonly xmltvPreviewByStreamId = new Map<number, EpgItem>();
     private readonly namePreviewByStreamId = new Map<number, EpgItem>();
+    /** Name index each stream's last planned lookup ran under. */
+    private readonly nameKeyByStreamId = new Map<number, string | null>();
     private visibleSet = new Set<number>();
     private processing = false;
     private enqueueGeneration = 0;
@@ -173,6 +177,7 @@ export class EpgQueueService implements OnDestroy {
         this.epgChannelByStreamId.delete(streamId);
         this.xmltvPreviewByStreamId.delete(streamId);
         this.namePreviewByStreamId.delete(streamId);
+        this.nameKeyByStreamId.delete(streamId);
         this.inFlight.delete(streamId);
         this.invalidationEpoch.set(
             streamId,
@@ -257,11 +262,8 @@ export class EpgQueueService implements OnDestroy {
         this.visibleSet = new Set(visibleIds);
         this.queue = [];
 
-        const plan = planNameMatches(
-            normalized,
-            mapped,
-            names ? await names : null
-        );
+        const nameResult = names ? await names : null;
+        const plan = planNameMatches(normalized, mapped, nameResult);
         const batchResult = await this.fetchXmltvCurrentPure([
             ...new Set([...streamsByEpgId.keys(), ...plan.batchIds]),
         ]);
@@ -300,6 +302,11 @@ export class EpgQueueService implements OnDestroy {
             }
             this.xmltvPreviewByStreamId.delete(entry.streamId);
             this.namePreviewByStreamId.delete(entry.streamId);
+            if (nameResult) {
+                this.nameKeyByStreamId.set(entry.streamId, nameResult.indexKey);
+            } else {
+                this.nameKeyByStreamId.delete(entry.streamId);
+            }
         }
         for (const [epgChannelId, item] of Object.entries(batchResult)) {
             const streams = streamsByEpgId.get(epgChannelId) ?? [];
@@ -378,6 +385,7 @@ export class EpgQueueService implements OnDestroy {
         for (const id of new Set([
             ...this.epgChannelByStreamId.keys(),
             ...this.namePreviewByStreamId.keys(),
+            ...this.nameKeyByStreamId.keys(),
         ])) {
             // getCached() honors TTL and lazily evicts expired entries;
             // a raw cache.has() would keep stale previews alive forever.
@@ -385,6 +393,7 @@ export class EpgQueueService implements OnDestroy {
                 this.epgChannelByStreamId.delete(id);
                 this.xmltvPreviewByStreamId.delete(id);
                 this.namePreviewByStreamId.delete(id);
+                this.nameKeyByStreamId.delete(id);
             }
         }
     }
@@ -426,6 +435,9 @@ export class EpgQueueService implements OnDestroy {
         // the offset current when it lands.
         this.retireStateOfPreviousOffset();
         const offsetMinutes = this.epgOffsetMinutes();
+        // An empty answer stands for the name lookup planned before the
+        // request, not for an index built while it was on the wire.
+        const nameKey = this.nameKeyByStreamId.get(streamId);
         const outcome = await requestEpgPreviewWindow(
             this.apiService,
             credentials,
@@ -467,11 +479,15 @@ export class EpgQueueService implements OnDestroy {
                 return;
             }
 
+            // A name match recorded while the request was on the wire is
+            // the answer; an empty provider must not replace it.
+            if (this.hasCachedProgramme(streamId)) return;
+
             // `epgChannelId` XMLTV first, the name match last.
             const xmltv =
                 this.xmltvPreviewByStreamId.get(streamId) ??
                 this.namePreviewByStreamId.get(streamId);
-            this.recordSuccess(streamId, xmltv ? [xmltv] : []);
+            this.recordSuccess(streamId, xmltv ? [xmltv] : [], nameKey);
         } finally {
             // Only release the in-flight marker if this request still owns it.
             // When invalidate() cleared it mid-flight, a later re-enqueue may
@@ -506,12 +522,20 @@ export class EpgQueueService implements OnDestroy {
         }
     }
 
-    private recordSuccess(streamId: number, items: EpgItem[]): void {
+    /** `nameKey`: the index the answer was reached under, default current. */
+    private recordSuccess(
+        streamId: number,
+        items: EpgItem[],
+        nameKey?: string | null
+    ): void {
         const previous = this.cache.get(streamId)?.data;
         this.cache.set(streamId, {
             data: items,
             timestamp: Date.now(),
-            nameKey: this.fallbackService.nameIndexKey(),
+            nameKey:
+                nameKey === undefined
+                    ? this.fallbackService.nameIndexKey()
+                    : nameKey,
         });
         this.failureTimestamps.delete(streamId);
 

@@ -380,6 +380,56 @@ describe('EpgQueueService name match', () => {
             expect(getShortEpg).toHaveBeenCalledTimes(1);
             expect(service.getCached(1)).toEqual([]);
         });
+
+        /** Holds the next provider answer until the returned call. */
+        function holdProvider(): () => void {
+            let release: (() => void) | undefined;
+            getShortEpg.mockImplementationOnce(
+                () =>
+                    new Promise<EpgItem[]>((resolve) => {
+                        release = () => resolve([]);
+                    })
+            );
+            return () => release?.();
+        }
+
+        it('keeps a name match recorded while an empty provider answer was in flight', async () => {
+            const later = { ...named, channelName: 'XY: LATER NEWS' };
+            const release = holdProvider();
+            await enqueueAndSettle([later]);
+            expect(providerCalledFor(1)).toBe(true);
+
+            // An import adds the channel while the provider request runs.
+            guide = buildEpgNameIndex([
+                { id: 'laternews.us', displayName: 'Later News' },
+            ]);
+            indexKey = 'index-2';
+            await enqueueAndSettle([later]);
+            expect(service.getCached(1)?.[0].title).toBe(
+                'laternews.us (XMLTV)'
+            );
+
+            release();
+            await jest.advanceTimersByTimeAsync(0);
+
+            expect(service.getCached(1)?.[0].title).toBe(
+                'laternews.us (XMLTV)'
+            );
+        });
+
+        it('caches an empty answer under the index its name lookup used', async () => {
+            const later = { ...named, channelName: 'XY: LATER NEWS' };
+            const release = holdProvider();
+            await enqueueAndSettle([later]);
+
+            // Another view builds a newer index before the provider
+            // answers empty; that answer says nothing about the new index.
+            indexKey = 'index-2';
+            release();
+            await jest.advanceTimersByTimeAsync(0);
+
+            expect(service.getCached(1)).toBeNull();
+        });
     });
 
     it('does nothing with EPG turned off', async () => {

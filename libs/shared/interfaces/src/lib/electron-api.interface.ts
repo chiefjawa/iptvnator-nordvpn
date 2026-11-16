@@ -479,6 +479,8 @@ export interface ElectronBridgeEpgChannelListResult {
     channels: ElectronBridgeEpgChannelSummary[];
     /** Always empty for this endpoint; retained for wire-format compatibility. */
     programs: [];
+    /** Set when the channels could not be read: not an empty guide. */
+    error?: string;
 }
 
 export interface ElectronBridgeDbOperationEvent {

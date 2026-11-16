@@ -262,6 +262,19 @@ describe('epg-name-match.util', () => {
             ).toBe('samplecinema.uk');
         });
 
+        it('reads the country of a second prefix after a package tag', () => {
+            expect(guide.resolve('VIP: US: SAMPLE CINEMA')).toBe(
+                'samplecinema.us'
+            );
+            expect(guide.resolve('XY| UK: SAMPLE CINEMA')).toBe(
+                'samplecinema.uk'
+            );
+            // A country first prefix stays the hint.
+            expect(guide.resolve('CA: XY: SAMPLE CINEMA')).toBe(
+                'samplecinema.ca'
+            );
+        });
+
         it('lets a name prefix narrow a regional category', () => {
             const regional = index([
                 ch('samplecanal2.co', 'Sample Canal 2'),

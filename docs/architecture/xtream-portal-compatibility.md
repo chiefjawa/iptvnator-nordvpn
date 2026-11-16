@@ -1097,7 +1097,8 @@ unambiguous one wins:
    sibling channel. Needs a country hint; a runner-up of another bag within
    0.15 coverage makes it ambiguous.
 
-Country hint: the category prefix (`US| …`), else the name prefix, maps to
+Country hint: the category prefix (`US| …`), else the name prefix (the second
+one when only it is a country, `VIP: US: `), maps to
 guide id suffixes (`.us`; `UK`/`GB` → `.uk`; `AR` → Arabic countries, `ARG` →
 `.ar`; `LA`, `EXYU`, `AFR` → regions). A name prefix overrides the category
 when it narrows a region or is spelled out (three or more letters). Only ISO
@@ -1117,12 +1118,15 @@ XMLTV-by-id reads, so the display offset applies identically.
 needs it (one `getEpgChannels` IPC, never at startup; the row queue starts it
 in parallel with the mapping IPC) and reuses it until the EPG source revision
 changes (settings, reconciliation, the global EPG toggle) or an import reports
-`complete`. The index keeps exact, key and call-sign maps plus an inverted
-token index for `partial`, and memoizes lookups. `readyKey()` names the index
-a lookup would use; the row queue records every empty answer under it, and an
-empty answer recorded before the index was ready, or under an older index, is
-no longer returned by `getCached`, so a name match that became available is
-not hidden for the 5-minute TTL.
+`complete`. A failed channel read (the IPC rejects or answers `error`) is not
+kept: the next lookup retries it. The index keeps exact, key and call-sign
+maps plus an inverted token index for `partial`, and memoizes lookups. `readyKey()` names the index
+a lookup would use; the row queue records every empty answer under the key
+its enqueue's name lookup ran with, and an empty answer recorded before the
+index was ready, or under an older index, is no longer returned by
+`getCached`, so a name match that became available is not hidden for the
+5-minute TTL. An empty provider answer that lands after a name match was
+recorded for the row leaves that match in place.
 
 The channel list loads the rows on screen whenever its current viewport's
 rendered range or the list itself changes. The viewport is recreated when the

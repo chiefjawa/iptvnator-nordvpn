@@ -120,6 +120,15 @@ describe('EpgQueryService', () => {
         ).rejects.toThrow('XMLTV schedule unavailable');
     });
 
+    it('tells a failed channel list read apart from an empty guide', async () => {
+        getDatabase.mockRejectedValue(new Error('synthetic database failure'));
+        await expect(service.getAllChannels()).resolves.toEqual({
+            channels: [],
+            programs: [],
+            error: 'XMLTV channels unavailable',
+        });
+    });
+
     it('scopes display-name current program fallback by program source ownership for shared channels', async () => {
         const whereCalls: unknown[] = [];
         const select = jest

@@ -106,6 +106,22 @@ describe('XtreamEpgNameIndexService', () => {
         expect(index?.resolve('Sample News')).toBe('sample.news');
     });
 
+    it.each([
+        ['an error answer', { channels: [], programs: [], error: 'db busy' }],
+        ['an answer without a channel list', {}],
+        ['no answer', undefined],
+    ])('retries after %s instead of caching an empty index', async (_, bad) => {
+        const service = TestBed.inject(XtreamEpgNameIndexService);
+        getEpgChannels.mockResolvedValueOnce(bad);
+
+        await expect(service.load()).resolves.toBeNull();
+        expect(service.readyKey()).toBe(EPG_NAME_INDEX_UNAVAILABLE);
+        const index = await service.load();
+
+        expect(getEpgChannels).toHaveBeenCalledTimes(2);
+        expect(index?.resolve('Sample News')).toBe('sample.news');
+    });
+
     it('answers null without a bridge or with EPG turned off', async () => {
         const service = TestBed.inject(XtreamEpgNameIndexService);
         await TestBed.inject(EpgPreferencesService).apply(false);

@@ -338,9 +338,14 @@ export class EpgQueryService {
         }
     }
 
+    /**
+     * Every stored XMLTV channel. A database failure answers with `error`
+     * so callers can tell it apart from an empty guide and retry.
+     */
     async getAllChannels(): Promise<{
         channels: Array<{ id: string; displayName: string }>;
         programs: never[];
+        error?: string;
     }> {
         try {
             const db = await getDatabase();
@@ -359,7 +364,11 @@ export class EpgQueryService {
                 'Error getting all channels:',
                 error
             );
-            return { channels: [], programs: [] };
+            return {
+                channels: [],
+                programs: [],
+                error: 'XMLTV channels unavailable',
+            };
         }
     }
 

@@ -294,6 +294,7 @@ export default class EpgEvents {
     private static async handleGetAllChannels(): Promise<{
         channels: Array<{ id: string; displayName: string }>;
         programs: never[];
+        error?: string;
     }> {
         return epgQueryService.getAllChannels();
     }

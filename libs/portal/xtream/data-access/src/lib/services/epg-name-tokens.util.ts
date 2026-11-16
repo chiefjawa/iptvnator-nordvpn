@@ -5,6 +5,8 @@
  * both sides alike.
  */
 
+import { countrySuffixesForPrefix } from './epg-name-country.util';
+
 export interface EpgNameAnalysis {
     /** Distinct significant tokens, in name order. */
     readonly tokens: readonly string[];
@@ -20,7 +22,10 @@ export interface EpgNameAnalysis {
     readonly callSigns: readonly string[];
     /** Unbracketed call-sign-shaped tokens (`WXYZ`), a weaker signal. */
     readonly looseCallSigns: readonly string[];
-    /** Lower-case first token of a stripped `XX:`/`XX|` prefix, if any. */
+    /**
+     * Lower-case first token of a stripped `XX:`/`XX|` prefix, if any; of
+     * the second prefix when only that one names a country (`VIP: US: `).
+     */
     readonly prefix: string | null;
     /**
      * Only channel words and numbers (`TV 1`, `Channel 4`): the noise words
@@ -173,7 +178,15 @@ export function analyzeEpgChannelName(
         const rest = value.slice(match[0].length);
         // A "prefix" that leaves only tags (`Sample One | HD`) was the name.
         if (significantTokens(rest).length === 0) break;
-        prefix ??= match[1].split(/[ -]/u)[0];
+        const token = match[1].split(/[ -]/u)[0];
+        // A package tag yields the hint to a country after it (`VIP: US: `).
+        if (
+            pass === 0 ||
+            (!countrySuffixesForPrefix(prefix) &&
+                countrySuffixesForPrefix(token))
+        ) {
+            prefix = token;
+        }
         value = rest;
     }
 

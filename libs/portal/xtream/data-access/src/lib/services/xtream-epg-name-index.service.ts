@@ -40,16 +40,19 @@ export class XtreamEpgNameIndexService {
             index: Promise.resolve()
                 .then(() => getEpgChannels.call(window.electron))
                 .then((result) => {
-                    const index = buildEpgNameIndex(
-                        Array.isArray(result?.channels) ? result.channels : []
-                    );
+                    // A failed read is not an empty guide: retry it.
+                    if (result?.error || !Array.isArray(result?.channels)) {
+                        throw new Error('XMLTV channels unavailable');
+                    }
+                    const index = buildEpgNameIndex(result.channels);
                     if (this.current === entry) {
                         this.settled = { key, ok: true };
                     }
                     return index;
                 })
                 .catch(() => {
-                    // Retry on the next lookup instead of caching a failure.
+                    // Retry on the next lookup instead of caching a failure
+                    // (a rejected read or an `error` answer alike).
                     if (this.current === entry) {
                         this.current = undefined;
                         this.settled = { key, ok: false };
