@@ -58,8 +58,9 @@ import { expect, test } from './fixtures';
  * every spec file and its state is keyed by MAC:
  *
  * - ACROSS FILES: `beforeEach` resets only the MACs in `OWNED_MACS`, and the
- *   sibling files that touch this server (self-hosted, sources-pwa) own a
- *   disjoint `00:1A:79:5F:*` range, so neither can clear the other's state.
+ *   self-hosted suite owns `00:1A:79:5F:*`. PWA source consumers allocate
+ *   per-test MACs in `00:1A:79:C0:*` through `00:1A:79:FF:*`, so their
+ *   scoped resets cannot clear this file's sessions.
  * - WITHIN THIS FILE: tests deliberately share scenario MACs (`default`,
  *   `minimal`, `embedded-series` — their fixture shapes are what the
  *   assertions are written against), and every `beforeEach` resets all of
@@ -504,6 +505,21 @@ test('@stalker ITV full channel list loads via get_all_channels and search cover
         timeout: 10_000,
     });
     await expect(categories.nth(1).locator('.item-count')).toHaveText('40');
+
+    // The categories column can be folded on "All Items" too: the grid
+    // header then carries the way back.
+    const categoriesRailOnRoot = page.locator('aside.context-panel--route');
+    await page
+        .getByRole('button', { name: 'Hide categories', exact: true })
+        .click();
+    await expect(categoriesRailOnRoot).toHaveAttribute('inert', '');
+    const showCategories = allItemsGrid.locator(
+        '[data-test-id="live-show-categories"]'
+    );
+    await expect(showCategories).toBeFocused();
+    await showCategories.click();
+    await expect(categoriesRailOnRoot).not.toHaveAttribute('inert');
+    await expect(showCategories).toHaveCount(0);
 
     // Starting from All Items leaves the category unset. Its fullscreen
     // list must still show and window the full cache without a search term.
@@ -989,6 +1005,32 @@ test.describe('@stalker full portal authentication', () => {
         test.setTimeout(90_000);
     });
 
+    test('imports and reopens a full portal without SubtleCrypto on LAN HTTP', async ({
+        page,
+    }, testInfo) => {
+        // localhost is trustworthy even over HTTP. Remove only the API that
+        // Chrome omits on a real NAS/LAN HTTP origin, including after reload.
+        await page.addInitScript(() => {
+            Object.defineProperty(window.crypto, 'subtle', {
+                configurable: true,
+                value: undefined,
+            });
+        });
+        await page.reload();
+        expect(await page.evaluate(() => typeof crypto.subtle)).toBe('undefined');
+        const requests = recordPortalRequests(page);
+        const mac = getStatefulAuthMacs(testInfo).authenticatedFlow;
+
+        await addFullStalkerPortal(page, { mac });
+        await expect(page.locator('.category-item').first()).toBeVisible();
+        expect(requests.some((entry) => entry.action === 'handshake')).toBe(true);
+        expect(requests.some((entry) => entry.action === 'get_profile')).toBe(true);
+
+        await page.reload();
+        await expect(page.locator('.category-item').first()).toBeVisible();
+        expect(await page.evaluate(() => typeof crypto.subtle)).toBe('undefined');
+    });
+
     test('handshakes and authenticates before loading content', async ({
         page,
     }, testInfo) => {
@@ -1441,6 +1483,7 @@ test('@stalker @epg PWA keeps failed background guides off the snackbar', async 
     });
     await addStalkerPortal(page);
     await page.getByRole('link', { name: 'Live TV', exact: true }).click();
+    await page.waitForURL(/stalker.*itv/);
     await page.locator('.category-item').nth(1).click();
     const channels = page.locator(
         'app-stalker-live-stream-layout [data-test-id="channel-item"]'

@@ -1,9 +1,11 @@
+import { HOSTED_SERVER_ACCESS_CODE, HOSTED_SERVER_CONTROL } from '@iptvnator/shared/interfaces';
 import { createAppMenuListener } from './app-menu-listener';
 import { createMultiplexApi } from './multiplex-preload';
 import type {
     ElectronBridgeFavoriteReorderUpdate,
     XtreamFavoriteRemovalRef,
     XtreamBackupFavoriteItem,
+    XtreamCatalogStateCondition,
 } from '@iptvnator/shared/interfaces';
 import type { SourceProbeContext } from '@iptvnator/shared/interfaces';
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron';
@@ -24,6 +26,8 @@ import {
     SOURCE_SYNC_CONNECTION,
     SOURCE_SYNC_CONFIGURE,
     SOURCE_SYNC_DISCONNECT,
+    SOURCE_SYNC_FORGET,
+    SOURCE_SYNC_SAVED_CONNECTION,
     SOURCE_SYNC_REQUEST,
     SOURCE_SYNC_LOCAL_SOURCES,
     SOURCE_SYNC_RESUME,
@@ -311,11 +315,28 @@ const electronApi: ElectronBridgeApi = {
         if (result?.error) throw new Error('SOURCE_SYNC.INCOMPATIBLE');
         return result;
     },
+    sourceSyncSavedConnection: () =>
+        ipcRenderer.sendSync(SOURCE_SYNC_SAVED_CONNECTION),
+    historyLocalRequest: (request) =>
+        ipcRenderer.invoke('DB_HISTORY_LOCAL', request),
+    favoritesLocalRequest: (request) =>
+        ipcRenderer.invoke('DB_FAVORITES_LOCAL', request),
+    activityLocalRequest: (request) =>
+        ipcRenderer.invoke('DB_ACTIVITY_LOCAL', request),
     sourceSyncRequest: (request) =>
         ipcRenderer.invoke(SOURCE_SYNC_REQUEST, request),
-    sourceSyncConfigure: (url, token, restart) =>
-        ipcRenderer.invoke(SOURCE_SYNC_CONFIGURE, url, token, restart),
+    hostedServerControl: (command) => ipcRenderer.invoke(HOSTED_SERVER_CONTROL, command),
+    hostedServerAccessCode: () => ipcRenderer.invoke(HOSTED_SERVER_ACCESS_CODE),
+    sourceSyncConfigure: (url, token, restart, savedInstanceId) =>
+        ipcRenderer.invoke(
+            SOURCE_SYNC_CONFIGURE,
+            url,
+            token,
+            restart,
+            savedInstanceId
+        ),
     sourceSyncDisconnect: () => ipcRenderer.invoke(SOURCE_SYNC_DISCONNECT),
+    sourceSyncForget: () => ipcRenderer.invoke(SOURCE_SYNC_FORGET),
     sourceSyncLocalSources: () => ipcRenderer.invoke(SOURCE_SYNC_LOCAL_SOURCES),
     onSourceSyncResume: (callback) => {
         const handler = () => callback();
@@ -550,14 +571,16 @@ const electronApi: ElectronBridgeApi = {
         credentials?: {
             authorization?: string | null;
             cookie?: string | null;
-        } | null
+        } | null,
+        origin?: string | null
     ) =>
         ipcRenderer.invoke(
             'set-user-agent',
             userAgent,
             referer,
             scopeUrl,
-            credentials
+            credentials,
+            origin
         ),
     openInMpv: (
         url: string,
@@ -568,7 +591,8 @@ const electronApi: ElectronBridgeApi = {
         origin?: string,
         contentInfo?: PlayerContentInfo,
         startTime?: number,
-        headers?: Record<string, string>
+        headers?: Record<string, string>,
+        launchId?: string
     ): Promise<ExternalPlayerSession> =>
         ipcRenderer.invoke(
             'OPEN_MPV_PLAYER',
@@ -580,7 +604,8 @@ const electronApi: ElectronBridgeApi = {
             origin,
             contentInfo,
             startTime,
-            headers
+            headers,
+            launchId
         ),
     openInVlc: (
         url: string,
@@ -591,7 +616,8 @@ const electronApi: ElectronBridgeApi = {
         origin?: string,
         contentInfo?: PlayerContentInfo,
         startTime?: number,
-        headers?: Record<string, string>
+        headers?: Record<string, string>,
+        launchId?: string
     ): Promise<ExternalPlayerSession> =>
         ipcRenderer.invoke(
             'OPEN_VLC_PLAYER',
@@ -603,10 +629,15 @@ const electronApi: ElectronBridgeApi = {
             origin,
             contentInfo,
             startTime,
-            headers
+            headers,
+            launchId
         ),
-    closeExternalPlayerSession: (sessionId: string) =>
-        ipcRenderer.invoke('CLOSE_EXTERNAL_PLAYER_SESSION', sessionId),
+    closeExternalPlayerSession: (sessionId: string, exact?: boolean) =>
+        ipcRenderer.invoke(
+            'CLOSE_EXTERNAL_PLAYER_SESSION',
+            sessionId,
+            ...(exact ? [true] : [])
+        ),
     getEmbeddedMpvSupport: (): Promise<EmbeddedMpvSupport> =>
         ipcRenderer.invoke('EMBEDDED_MPV_SUPPORT'),
     prepareEmbeddedMpv: (): Promise<EmbeddedMpvSupport> =>
@@ -614,13 +645,15 @@ const electronApi: ElectronBridgeApi = {
     createEmbeddedMpvSession: (
         bounds: EmbeddedMpvBounds,
         title?: string,
-        initialVolume?: number
+        initialVolume?: number,
+        subtitlesOff?: boolean
     ): Promise<EmbeddedMpvSession> =>
         ipcRenderer.invoke(
             'EMBEDDED_MPV_CREATE_SESSION',
             bounds,
             title,
-            initialVolume
+            initialVolume,
+            subtitlesOff
         ),
     loadEmbeddedMpvPlayback: (
         sessionId: string,
@@ -716,11 +749,14 @@ const electronApi: ElectronBridgeApi = {
         ipcRenderer.invoke('EMBEDDED_MPV_DISPOSE_SESSION', sessionId),
     attachEmbeddedMpvFrameView: (sessionId: string): Promise<boolean> =>
         attachEmbeddedMpvFrameView(sessionId),
-    detachEmbeddedMpvFrameView: (): void => detachEmbeddedMpvFrameView(),
+    detachEmbeddedMpvFrameView: (sessionId?: string): void =>
+        detachEmbeddedMpvFrameView(sessionId),
     autoUpdatePlaylists: (
         playlists: Playlist[],
         options?: ElectronBridgeTrustOptions
     ) => ipcRenderer.invoke('AUTO_UPDATE', playlists, options),
+    setEpgEnabled: (enabled: boolean) =>
+        ipcRenderer.invoke('EPG_SET_ENABLED', enabled),
     fetchEpg: (urls: string[], options?: ElectronBridgeTrustOptions) =>
         ipcRenderer.invoke('FETCH_EPG', { url: urls, options }),
     getChannelPrograms: (
@@ -749,8 +785,11 @@ const electronApi: ElectronBridgeApi = {
         ipcRenderer.invoke('EPG_FORCE_FETCH', { url, options }),
     openEpgFileDialog: () => ipcRenderer.invoke('EPG_OPEN_FILE_DIALOG'),
     clearEpgData: () => ipcRenderer.invoke('EPG_CLEAR_ALL'),
-    reconcileEpgSources: (urls: string[]) =>
-        ipcRenderer.invoke('EPG_RECONCILE_SOURCES', { urls }),
+    reconcileEpgSources: (urls: string[], epgEnabled?: boolean) =>
+        ipcRenderer.invoke('EPG_RECONCILE_SOURCES', {
+            urls,
+            ...(epgEnabled === undefined ? {} : { epgEnabled }),
+        }),
     clearEpgDataForSource: (sourceUrl: string) =>
         ipcRenderer.invoke('EPG_CLEAR_SOURCE', { sourceUrl }),
     checkEpgFreshness: (urls: string[], maxAgeHours?: number) =>
@@ -777,6 +816,8 @@ const electronApi: ElectronBridgeApi = {
         ipcRenderer.invoke('EPG_CHANNEL_SEARCH', { searchTerm, limit }),
     setMpvPlayerPath: (mpvPlayerPath: string) =>
         ipcRenderer.invoke('SET_MPV_PLAYER_PATH', mpvPlayerPath),
+    getExternalPlayerAvailability: (paths?: { mpv?: string; vlc?: string }) =>
+        ipcRenderer.invoke('GET_EXTERNAL_PLAYER_AVAILABILITY', paths),
     setVlcPlayerPath: (vlcPlayerPath: string) =>
         ipcRenderer.invoke('SET_VLC_PLAYER_PATH', vlcPlayerPath),
     updateSettings: (settings: Partial<Settings>) =>
@@ -858,8 +899,17 @@ const electronApi: ElectronBridgeApi = {
     ) => ipcRenderer.invoke('DB_UPDATE_PLAYLIST', playlistId, updates),
     dbDeletePlaylist: (playlistId: string, operationId?: string) =>
         ipcRenderer.invoke('DB_DELETE_PLAYLIST', playlistId, operationId),
-    dbDeleteXtreamContent: (playlistId: string, operationId?: string) =>
-        ipcRenderer.invoke('DB_DELETE_XTREAM_CONTENT', playlistId, operationId),
+    dbDeleteXtreamContent: (
+        playlistId: string,
+        operationId?: string,
+        contentTypes?: import('@iptvnator/shared/interfaces').XtreamContentType[]
+    ) =>
+        ipcRenderer.invoke(
+            'DB_DELETE_XTREAM_CONTENT',
+            playlistId,
+            operationId,
+            ...(contentTypes === undefined ? [] : [contentTypes])
+        ),
     dbRestoreXtreamFavorites: (
         playlistId: string,
         favorites: XtreamBackupFavoriteItem[],
@@ -905,11 +955,16 @@ const electronApi: ElectronBridgeApi = {
         ),
     dbGetAllCategories: (playlistId: string, type: string) =>
         ipcRenderer.invoke('DB_GET_ALL_CATEGORIES', playlistId, type),
-    dbUpdateCategoryVisibility: (categoryIds: number[], hidden: boolean) =>
+    dbUpdateCategoryVisibility: (
+        categoryIds: number[],
+        hidden: boolean,
+        explicit?: boolean
+    ) =>
         ipcRenderer.invoke(
             'DB_UPDATE_CATEGORY_VISIBILITY',
             categoryIds,
-            hidden
+            hidden,
+            ...(explicit === undefined ? [] : [explicit])
         ),
     dbSetCategoryLocks: (
         playlistId: string,
@@ -1024,8 +1079,12 @@ const electronApi: ElectronBridgeApi = {
         updates: ElectronBridgeFavoriteReorderUpdate[]
     ) => ipcRenderer.invoke('DB_REORDER_GLOBAL_FAVORITES', updates),
     // Recently viewed (playlist-specific)
-    dbGetRecentItems: (playlistId: string) =>
-        ipcRenderer.invoke('DB_GET_RECENT_ITEMS', playlistId),
+    dbGetRecentItems: (playlistId: string, options?: { all?: boolean }) =>
+        ipcRenderer.invoke(
+            'DB_GET_RECENT_ITEMS',
+            playlistId,
+            ...(options ? [options] : [])
+        ),
     dbAddRecentItem: (
         contentId: number,
         playlistId: string,
@@ -1048,14 +1107,22 @@ const electronApi: ElectronBridgeApi = {
         xtreamId: number,
         playlistId: string,
         contentType?: 'live' | 'movie' | 'series',
-        identity?: ContentMetadataPatch
+        identity?: ContentMetadataPatch,
+        categoryId?: number,
+        excludeLocked?: boolean
     ) =>
         ipcRenderer.invoke(
             'DB_GET_CONTENT_BY_XTREAM_ID',
             xtreamId,
             playlistId,
             contentType,
-            ...(identity ? [identity] : [])
+            ...(excludeLocked
+                ? [identity, categoryId, true]
+                : categoryId !== undefined
+                  ? [identity, categoryId]
+                  : identity
+                    ? [identity]
+                    : [])
         ),
     dbSetContentMetadataIfMissing: (
         contentId: number,
@@ -1071,8 +1138,19 @@ const electronApi: ElectronBridgeApi = {
     dbCancelOperation: (operationId: string) =>
         ipcRenderer.invoke('DB_CANCEL_OPERATION', operationId),
     dbGetAppState: (key: string) => ipcRenderer.invoke('DB_GET_APP_STATE', key),
-    dbSetAppState: (key: string, value: string) =>
-        ipcRenderer.invoke('DB_SET_APP_STATE', key, value),
+    dbCheckXtreamCatalogConnection: (condition: XtreamCatalogStateCondition) =>
+        ipcRenderer.invoke('DB_CHECK_XTREAM_CATALOG_CONNECTION', condition),
+    dbSetAppState: (
+        key: string,
+        value: string,
+        condition?: XtreamCatalogStateCondition
+    ) =>
+        ipcRenderer.invoke(
+            'DB_SET_APP_STATE',
+            key,
+            value,
+            ...(condition === undefined ? [] : [condition])
+        ),
     // TMDB metadata cache
     dbGetTmdbMetadata: (
         mediaType: TmdbCacheMediaType,

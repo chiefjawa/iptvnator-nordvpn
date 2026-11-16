@@ -11,6 +11,7 @@ import {
     OnInit,
     signal,
     untracked,
+    viewChild,
 } from '@angular/core';
 import { takeUntilDestroyed, toSignal } from '@angular/core/rxjs-interop';
 import { map } from 'rxjs/operators';
@@ -30,17 +31,10 @@ import {
     MenuItemRadioDirective,
 } from '@iptvnator/ui/components';
 import {
-    clearNavigationStateKeys,
-    consumeStalkerReturnMarker,
-    getOpenStalkerItemState,
-    getStalkerReturnByHistoryState,
-    isProviderOnlyDetailState,
-    normalizeStalkerHandoffIdentity,
     PortalCatalogFacade,
-    OPEN_STALKER_ITEM_STATE_KEY,
     PORTAL_CATALOG_DETAIL_COMPONENT,
     PORTAL_CATALOG_FACADE,
-    PROVIDER_ONLY_DETAIL_PRESENTATION_STATE_KEY,
+    STALKER_SIMILAR_FRAGMENT,
     PortalCatalogSortMode,
 } from '@iptvnator/portal/shared/util';
 import {
@@ -49,6 +43,10 @@ import {
 } from './catalog-sort-options';
 
 import { createCatalogWatchFilter } from './catalog-watch-filter';
+import { createCatalogHideWatched } from './catalog-hide-watched';
+import { createCatalogItemSubtitle } from './catalog-item-subtitle';
+import { createCatalogReturnFocus } from './catalog-return-focus';
+import { createStalkerCatalogHandoff } from './stalker-catalog-handoff';
 
 interface CategoryContentItem {
     id?: number | string;
@@ -83,9 +81,10 @@ interface CategoryContentItem {
 export class CategoryContentViewComponent implements OnInit, OnDestroy {
     private readonly activatedRoute = inject(ActivatedRoute);
     private readonly destroyRef = inject(DestroyRef);
-    private readonly hostElement = inject(ElementRef<HTMLElement>);
+    private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
+    private readonly gridList = viewChild(GridListComponent);
     private readonly router = inject(Router);
-    private readonly providerOnlyStalkerItemId = signal<string | null>(null);
+    private readonly focus = createCatalogReturnFocus(this.host.nativeElement);
     private readonly catalog = inject(
         PORTAL_CATALOG_FACADE
     ) as PortalCatalogFacade<
@@ -94,9 +93,18 @@ export class CategoryContentViewComponent implements OnInit, OnDestroy {
         CategoryContentItem
     >;
 
+    private readonly stalkerHandoff = createStalkerCatalogHandoff(
+        this.catalog,
+        this.host.nativeElement
+    );
+
+    readonly hideWatched = createCatalogHideWatched(
+        this.catalog,
+        this.host.nativeElement
+    );
     readonly watchFilter = createCatalogWatchFilter(
         this.catalog,
-        this.hostElement.nativeElement
+        this.host.nativeElement
     );
     readonly detailComponent = inject(PORTAL_CATALOG_DETAIL_COMPONENT);
     readonly contentType = this.catalog.contentType;
@@ -107,7 +115,10 @@ export class CategoryContentViewComponent implements OnInit, OnDestroy {
     readonly selectedItem = this.catalog.selectedItem;
     readonly contentSortMode = this.catalog.contentSortMode;
     readonly isPaginatedContentLoading = this.catalog.isPaginatedContentLoading;
-    readonly infiniteHasMore = this.catalog.hasMore;
+    readonly sourceHasMore = this.catalog.hasMore;
+    readonly infiniteHasMore = computed(
+        () => this.sourceHasMore() && !this.hideWatched.paused()
+    );
     readonly infiniteAppending = this.catalog.isAppending;
     readonly infiniteAppendError = this.catalog.appendError;
     readonly contentError = computed(
@@ -119,32 +130,11 @@ export class CategoryContentViewComponent implements OnInit, OnDestroy {
     readonly isCatalogLoadingSubtitle = computed(() =>
         this.isPaginatedContentLoading()
     );
-    /** Key and params; the template pipe re-renders once translations load. */
-    readonly categoryItemSubtitle = computed(() => {
-        if (this.contentError()) {
-            return { key: 'PORTALS.CATALOG_LOAD_ERROR.TITLE', params: {} };
-        }
-        if (this.watchFilter.blocked()) {
-            return {
-                key: this.watchFilter.error()
-                    ? 'WORKSPACE.REFINE_WATCH_ERROR_TITLE'
-                    : 'WORKSPACE.REFINE_WATCH_LOADING',
-                params: {},
-            };
-        }
-        if (this.isCatalogLoadingSubtitle()) {
-            return { key: 'WORKSPACE.SHELL.XTREAM_IMPORT_LOADING', params: {} };
-        }
-
-        const count = this.categoryItemCount();
-        return {
-            key:
-                count === 1
-                    ? 'WORKSPACE.CONTEXT.ITEM_COUNT_ONE'
-                    : 'WORKSPACE.CONTEXT.ITEM_COUNT_OTHER',
-            params: { count },
-        };
-    });
+    readonly categoryItemSubtitle = createCatalogItemSubtitle(
+        this.catalog,
+        this.watchFilter,
+        this.hideWatched
+    );
     readonly canSortContent = computed(() => this.contentSortMode() !== null);
     readonly supportsRatingSort = computed(
         () => this.catalog.supportsRatingSort === true
@@ -162,12 +152,14 @@ export class CategoryContentViewComponent implements OnInit, OnDestroy {
         () =>
             this.canSortContent() ||
             this.canFilterByRating() ||
-            this.watchFilter.canFilter()
+            this.watchFilter.canFilter() ||
+            this.hideWatched.supported()
     );
     readonly activeRefinementCount = computed(
         () =>
             Number(this.minRating() !== null) +
-            Number(this.watchFilter.active())
+            Number(this.watchFilter.active()) +
+            Number(this.hideWatched.active())
     );
     readonly sortOptions = computed(() =>
         CATALOG_SORT_OPTIONS.filter(
@@ -184,21 +176,7 @@ export class CategoryContentViewComponent implements OnInit, OnDestroy {
     readonly selectedDetailComponent = computed(() =>
         this.selectedItem() ? this.detailComponent : null
     );
-    readonly detailComponentInputs = computed<
-        Record<string, unknown> | undefined
-    >(() => {
-        if (this.catalog.provider !== 'stalker') {
-            return undefined;
-        }
-
-        const providerItemId = this.providerOnlyStalkerItemId();
-        return {
-            providerOnly:
-                providerItemId !== null &&
-                providerItemId ===
-                    this.stalkerItemIdentity(this.selectedItem()),
-        };
-    });
+    readonly detailComponentInputs = this.stalkerHandoff.detailInputs;
     readonly contentWithProgress = computed(() =>
         (this.paginatedContent() ?? []).map((item: CategoryContentItem) => ({
             ...item,
@@ -221,6 +199,7 @@ export class CategoryContentViewComponent implements OnInit, OnDestroy {
             this.contentSortMode() ?? '',
             String(this.minRating() ?? ''),
             this.watchFilter.value() ?? '',
+            this.hideWatched.active(),
         ].join('|');
     });
     private previousGridResetKey: string | null = null;
@@ -241,10 +220,11 @@ export class CategoryContentViewComponent implements OnInit, OnDestroy {
     private initializedRoute: {
         category: { id: string | null };
         playlistId: string | null;
+        relatedEntry: string | null;
     } | null = null;
 
     constructor() {
-        const host = this.hostElement.nativeElement;
+        const host = this.host.nativeElement;
         host.addEventListener('scroll', this.trackGridScroll, {
             capture: true,
             passive: true,
@@ -260,20 +240,37 @@ export class CategoryContentViewComponent implements OnInit, OnDestroy {
                 return;
             }
             const playlistId = this.catalog.playlist()?.id ?? null;
-            // Query-only navigation toggles readiness too; only a new
-            // category arrival or playlist should reset the open detail.
-            if (
+            const navigation =
+                this.catalog.provider === 'stalker'
+                    ? this.router.lastSuccessfulNavigation?.()
+                    : null;
+            const fragment = navigation?.finalUrl?.fragment;
+            const relatedEntry = fragment?.startsWith(STALKER_SIMILAR_FRAGMENT)
+                ? fragment
+                : null;
+            const sameCategory =
                 this.initializedRoute?.category === category &&
-                this.initializedRoute.playlistId === playlistId
+                this.initializedRoute.playlistId === playlistId;
+            // A related detail can be a new history entry in the same category.
+            if (
+                sameCategory &&
+                this.initializedRoute?.relatedEntry === relatedEntry
             ) {
                 return;
             }
-            this.initializedRoute = { category, playlistId };
+            this.initializedRoute = { category, playlistId, relatedEntry };
             untracked(() => {
-                this.providerOnlyStalkerItemId.set(null);
-                this.catalog.initialize(category.id);
-                this.catalog.setSearchQuery?.(this.searchTerm());
-                this.openStalkerItemFromNavigationState();
+                this.stalkerHandoff.reset();
+                if (sameCategory) {
+                    this.catalog.clearSelectedItem();
+                } else {
+                    this.catalog.initialize(category.id);
+                    this.catalog.setSearchQuery?.(this.searchTerm());
+                }
+                this.stalkerHandoff.open(
+                    relatedEntry !== null,
+                    navigation?.trigger === 'popstate'
+                );
             });
         });
 
@@ -299,6 +296,7 @@ export class CategoryContentViewComponent implements OnInit, OnDestroy {
                 return;
             }
 
+            this.focus.recordReturnTrigger();
             if (
                 this.hasAttemptedScrollRestore ||
                 this.isPaginatedContentLoading() ||
@@ -310,7 +308,7 @@ export class CategoryContentViewComponent implements OnInit, OnDestroy {
             this.hasAttemptedScrollRestore = true;
             const scrollTop =
                 this.catalog.consumeSavedScrollPosition?.() ?? null;
-            if (scrollTop === null || scrollTop <= 0) {
+            if ((scrollTop ?? 0) <= 0 && !this.focus.pending()) {
                 return;
             }
 
@@ -318,7 +316,9 @@ export class CategoryContentViewComponent implements OnInit, OnDestroy {
             // window, one to apply the offset to the grown grid.
             requestAnimationFrame(() => {
                 requestAnimationFrame(() => {
-                    this.gridElement()?.scrollTo?.({ top: scrollTop });
+                    if (scrollTop !== null)
+                        this.gridList()?.restoreScrollPosition(scrollTop);
+                    this.focus.restore();
                 });
             });
         });
@@ -377,13 +377,14 @@ export class CategoryContentViewComponent implements OnInit, OnDestroy {
     }
 
     onItemClick(item: CategoryContentItem): void {
+        this.focus.capture();
         // Snapshot the grid offset before the detail replaces the list.
         const grid = this.gridElement();
         if (grid) {
             this.catalog.saveScrollPosition?.(grid.scrollTop);
         }
 
-        this.providerOnlyStalkerItemId.set(null);
+        this.stalkerHandoff.reset();
         const navigation = this.catalog.selectItem(item);
         if (navigation?.length) {
             this.router.navigate(navigation, {
@@ -394,7 +395,7 @@ export class CategoryContentViewComponent implements OnInit, OnDestroy {
     }
 
     private gridElement(): HTMLElement | null {
-        return this.hostElement.nativeElement.querySelector(
+        return this.host.nativeElement.querySelector(
             'app-grid-list'
         ) as HTMLElement | null;
     }
@@ -414,58 +415,5 @@ export class CategoryContentViewComponent implements OnInit, OnDestroy {
             queryParamsHandling: 'merge',
             replaceUrl: true,
         });
-    }
-
-    private openStalkerItemFromNavigationState(): void {
-        if (this.catalog.provider !== 'stalker') {
-            return;
-        }
-
-        const item = getOpenStalkerItemState(window.history.state);
-        if (!item) {
-            // The handoff item is gone, but its return contract can still sit
-            // on this entry: leaving with the browser's own Back never runs a
-            // back affordance, so nothing retired it. Landing here with no
-            // detail open means the handoff is over — any title opened from
-            // the list now is a fresh selection whose Back must close it
-            // rather than exit to the collection.
-            // Scoped to collection handoffs, which are the only ones that
-            // set the history-back marker: a plain `stalkerReturnTo` caller
-            // (the dashboard) keeps its existing re-navigating behaviour.
-            if (
-                !this.selectedItem() &&
-                getStalkerReturnByHistoryState(window.history.state)
-            ) {
-                consumeStalkerReturnMarker();
-            }
-            return;
-        }
-
-        const providerOnly = isProviderOnlyDetailState(window.history.state);
-        this.catalog.selectItem(item as CategoryContentItem);
-        // The item came from a stored snapshot, not the live list — let the
-        // provider refresh stale embedded data (e.g. episode lists).
-        this.catalog.refreshSnapshotSelection?.();
-        this.providerOnlyStalkerItemId.set(
-            providerOnly
-                ? this.stalkerItemIdentity(item as CategoryContentItem)
-                : null
-        );
-        clearNavigationStateKeys([
-            OPEN_STALKER_ITEM_STATE_KEY,
-            'openFavoriteItem',
-            'openRecentItem',
-            PROVIDER_ONLY_DETAIL_PRESENTATION_STATE_KEY,
-        ]);
-    }
-
-    private stalkerItemIdentity(
-        item: CategoryContentItem | null | undefined
-    ): string | null {
-        const rawId =
-            item?.id ?? item?.series_id ?? item?.movie_id ?? item?.stream_id;
-        // Shared with the return-marker binding in
-        // `resolveStalkerBackNavigation()` so the two cannot drift apart.
-        return normalizeStalkerHandoffIdentity(rawId) || null;
     }
 }

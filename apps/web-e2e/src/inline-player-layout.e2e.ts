@@ -1,4 +1,5 @@
 import { expect, test } from './fixtures';
+import { applyUiTheme } from './ui-consistency.fixture';
 import {
     interceptXtreamRequests,
     MOCK_SERVER,
@@ -22,7 +23,9 @@ for (const language of ['en', 'ru']) {
             browserName !== 'chromium',
             'Clipboard permission targets Chromium'
         );
-        await request.post(`${MOCK_SERVER}/reset`);
+        await request.post(
+            `${MOCK_SERVER}/reset?username=user1&password=pass1`
+        );
         await page.goto('/');
         await interceptXtreamRequests(page);
         await routeEpisodeClip(page);
@@ -79,10 +82,7 @@ for (const language of ['en', 'ru']) {
         });
 
         for (const dark of [false, true]) {
-            await page.evaluate(
-                (value) => document.body.classList.toggle('dark-theme', value),
-                dark
-            );
+            await applyUiTheme(page, dark);
             for (const width of [1440, 980, 390]) {
                 await page.setViewportSize({ width, height: 900 });
                 await expect(async () => {
@@ -100,13 +100,20 @@ for (const language of ['en', 'ru']) {
                 await expect(heading).toContainText(longTitle);
                 await expect(copy).toBeVisible();
                 await expect(close).toBeVisible();
-                for (const control of [heading, copy, close]) {
-                    const box = (await control.boundingBox())!;
-                    const panel = (await shell.boundingBox())!;
-                    expect(box.x).toBeGreaterThanOrEqual(panel.x);
-                    expect(box.x + box.width).toBeLessThanOrEqual(
-                        panel.x + panel.width
+                // A resize can move the player between separate browser calls.
+                const [panel, ...controls] = await shell.evaluate((element) => {
+                    const controls = element.querySelectorAll(
+                        '.player-shell__title, .player-shell__actions > button'
                     );
+                    return [element, ...controls].map((item) => {
+                        const { left, right } = item.getBoundingClientRect();
+                        return { left, right };
+                    });
+                });
+                expect(controls).toHaveLength(3);
+                for (const box of controls) {
+                    expect(box.left).toBeGreaterThanOrEqual(panel.left);
+                    expect(box.right).toBeLessThanOrEqual(panel.right);
                 }
                 await expect(copy).toHaveCSS('width', '40px');
                 await expect(shell).toHaveCSS('background-image', 'none');

@@ -1,5 +1,6 @@
 import { expect, Page, test } from '@playwright/test';
-import { addSource, nav, start, xtream } from './helpers';
+import { checkHorizontalRail } from './horizontal-rail';
+import { chooseTv, addSource, nav, start, xtream, cardAction } from './helpers';
 
 async function watch(page: Page, index: number, episode = false) {
     await nav(page, episode ? 'Series' : 'Movies');
@@ -95,6 +96,8 @@ test('home features three unfinished titles with manual wrap, remote focus, deta
         });
         expect(geometry.bottom).toBeLessThan(geometry.rail);
         expect(geometry.bottom).toBeLessThan(900);
+        // Continue watching starts on the first screen, right under the hero.
+        expect(geometry.rail).toBeLessThan(width === 1920 ? 760 : 1080);
         expect(geometry.overflow).toBe(false);
     }
     await page.locator('[data-focus="hero-resume"]').click();
@@ -114,8 +117,8 @@ test('home features three unfinished titles with manual wrap, remote focus, deta
     await expect(page.locator('.resume-card')).toHaveCount(4);
     await addSource(page, 'm3u');
     await nav(page, 'Home');
-    await expect(page.locator('[data-focus="hero-resume"]')).toHaveCount(0);
-    await expect(page.locator('.resume-card')).toHaveCount(0);
+    await expect(page.locator('[data-focus="hero-resume"]')).toHaveCount(1);
+    await expect(page.locator('.resume-card')).toHaveCount(4);
 });
 
 for (const provider of ['xtream', 'stalker'] as const)
@@ -189,7 +192,7 @@ for (const provider of ['xtream', 'stalker'] as const)
         const resumeScroll = await page
             .locator('main')
             .evaluate((el) => el.scrollTop);
-        await resume.click();
+        await cardAction(page, resume);
         await expect(
             page.locator('[data-focus="player-series-details"]')
         ).toBeVisible();
@@ -371,7 +374,9 @@ for (const action of ['exit', 'play'] as const) {
                 await expect(page.locator('.player-controls')).toBeVisible();
             }
             release();
-            await expect.poll(() => released).toBe(2);
+            // Fullscreen also owns a canceled/restarted next-episode sequence lookup.
+            await expect.poll(() => released).toBeGreaterThanOrEqual(2);
+            expect(held).toBeLessThanOrEqual(3);
             await expect
                 .poll(() =>
                     page.evaluate(
@@ -421,16 +426,10 @@ test('a retained series-details retry cannot reopen the previous source', async 
     await watch(page, 13, true);
     await addSource(page, 'm3u');
     await nav(page, 'Home');
+    await nav(page, 'Movies');
     const sources = page.getByLabel('Active source', { exact: true });
-    const firstSource = await sources
-        .locator('option')
-        .filter({ hasText: 'TV xtream' })
-        .getAttribute('value');
-    const nextSource = await sources
-        .locator('option')
-        .filter({ hasText: 'TV m3u' })
-        .getAttribute('value');
-    await sources.selectOption(firstSource!);
+    await chooseTv(page, 'Active source', { label: 'TV xtream · XTREAM' });
+    await nav(page, 'Home');
     await expect(page.locator('[data-focus="hero-resume"]')).toBeVisible();
     await expect(page.locator('.loading')).toBeHidden();
     const retry = page.getByRole('button', {
@@ -470,9 +469,10 @@ test('a retained series-details retry cannot reopen the previous source', async 
     await expect(page.locator('[data-focus="hero-resume"]')).toBeFocused();
     await failDetails();
     const retained = await retry.elementHandle();
-    await sources.selectOption(nextSource!);
+    await nav(page, 'Movies');
+    await chooseTv(page, 'Active source', { label: 'TV m3u · M3U' });
     await expect(page.locator('.loading')).toBeHidden();
-    await expect(page.locator('.hero')).toBeVisible();
+    await expect(page.locator('.empty')).toContainText('No titles');
     // An already queued click remains harmless after its original notice is retired.
     await retained!.evaluate((button: HTMLButtonElement) => button.click());
     await page.evaluate(
@@ -483,7 +483,9 @@ test('a retained series-details retry cannot reopen the previous source', async 
                 )
             )
     );
-    await expect(sources).toHaveValue(nextSource!);
+    await nav(page, 'Movies');
+    await expect(sources).toContainText('TV m3u');
+    await nav(page, 'Home');
     await expect(page.locator('.hero')).toBeVisible();
     await expect(page.locator('.detail-hero')).toHaveCount(0);
     await expect(retry).toHaveCount(0);
@@ -504,7 +506,9 @@ test('Home retains saved series-wide artwork without using episode stills and pr
     await page.route('https://artwork.test/**', (route) =>
         route.fulfill({
             contentType: 'image/svg+xml',
-            body: '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="170"><rect width="300" height="170" fill="#37544b"/></svg>',
+            body: route.request().url().includes('poster')
+                ? '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="450"><rect width="300" height="450" fill="#37544b"/><rect x="8" y="8" width="284" height="434" fill="none" stroke="#cbd9d0" stroke-width="8"/></svg>'
+                : '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="170"><rect width="300" height="170" fill="#37544b"/></svg>',
         })
     );
     await page.route('**/xtream?**', async (route) => {
@@ -543,7 +547,8 @@ test('Home retains saved series-wide artwork without using episode stills and pr
     await addSource(page, 'xtream');
     const title = await watch(page, 0, true);
     await expect(page.locator('.hero h1')).toHaveText(title);
-    await expect(page.locator('.hero p')).toHaveText(overview);
+    // While resuming, the description lives in Details, not in the hero.
+    await expect(page.locator('.hero p')).toHaveCount(0);
     await expect(page.locator('.page-backdrop img')).toHaveAttribute(
         'src',
         savedWide
@@ -552,6 +557,22 @@ test('Home retains saved series-wide artwork without using episode stills and pr
         'src',
         poster
     );
+    const cover = page.locator('.resume-card .poster-art').first();
+    const box = await cover.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.width / box!.height).toBeCloseTo(2 / 3, 2);
+    await expect(cover.locator('img')).toHaveCSS('object-fit', 'cover');
+    const cardBox = await page.locator('.resume-card').first().boundingBox();
+    const actionBox = await page
+        .locator('.resume-action')
+        .first()
+        .boundingBox();
+    expect(cardBox).not.toBeNull();
+    expect(actionBox).not.toBeNull();
+    expect(actionBox!.y + actionBox!.height).toBeLessThanOrEqual(
+        cardBox!.y + cardBox!.height
+    );
+    await page.screenshot({ path: test.info().outputPath('series-cover.png') });
     await page.evaluate(
         (still) =>
             new Promise<void>((resolve, reject) => {
@@ -593,6 +614,10 @@ test('Home retains saved series-wide artwork without using episode stills and pr
         episodeStill
     );
     await page.reload();
+    await expect(page.locator('.resume-card img').first()).toHaveAttribute(
+        'src',
+        poster
+    );
     await expect(page.locator('.page-backdrop img')).toHaveAttribute(
         'src',
         savedWide
@@ -677,4 +702,42 @@ test('browser Back on loading Home keeps its catalog requests alive', async ({
     } finally {
         release();
     }
+});
+
+test('Home rails hide native scrollbars and support pointer paging and directional focus', async ({
+    page,
+}) => {
+    await start(page);
+    await addSource(page, 'xtream', {
+        username: 'marketing',
+        password: 'marketing',
+    });
+    await nav(page, 'Home');
+    const row = page
+        .locator('.rail')
+        .filter({ has: page.locator('.poster-card:not(.channel-card)') })
+        .first();
+    await expect(row.locator('.poster-card')).toHaveCount(12);
+    for (const width of [1920, 1280]) {
+        await page.setViewportSize({ width, height: 1080 });
+        await checkHorizontalRail(page, row);
+        await row.locator('.poster-card').first().focus();
+        await page.keyboard.press('ArrowDown');
+        await expect(row.locator('.poster-card').first()).not.toBeFocused();
+        await row.locator('..').screenshot({
+            path: `../../dist/tv-verification/home-rail-${width}.png`,
+        });
+        await expect(
+            page.locator('.detail-hero,video[src],video source')
+        ).toHaveCount(0);
+        expect(
+            await page
+                .locator('main')
+                .evaluate(
+                    (element) => element.scrollWidth <= element.clientWidth
+                )
+        ).toBe(true);
+    }
+    await page.setViewportSize({ width: 3840, height: 2160 });
+    await expect(row.locator('..').locator('.rail-arrow')).toHaveCount(0);
 });

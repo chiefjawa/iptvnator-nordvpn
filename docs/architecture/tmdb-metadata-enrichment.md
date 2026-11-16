@@ -38,6 +38,36 @@ Related:
   endorsed or certified by TMDB.") is shown in the settings TMDB section and
   in Settings > About, as required by TMDB's terms.
 
+## One-time key transfer
+
+Connect both devices to the same IPTVnator library server. The Android TV
+shell uses the PWA's transfer dialog. In
+**Settings → Metadata (TMDB) → Transfer key from another device**, choose
+**Receive key** on the receiver, then **Send a saved key** on the sender. Enter
+the receiver's four-character code and explicitly send the key. The receiver saves
+it locally only after **Save key** or **Replace key**. TMDB enablement and other
+settings do not travel with the key. Start a new transfer after rotating it.
+
+The transfer uses the selected server's authenticated transport and checks the
+instance identity. Use HTTPS or a trusted local network; the relay sees the key
+in memory. The five-minute session has separate send and receive capabilities.
+The shared code can submit one key and cannot read it. The server limits
+short-code checks and sends to 12 requests per minute per connecting IP.
+Updated clients request the short format from the server and also accept the
+original long code. A receiver with an older client or server still displays a
+long code, which works with either sender version. Sending to a short code
+requires an updated sender. The receiver claims the
+key once; claim, cancellation, expiration or server restart discards the server
+copy. The receiving device needs writable IndexedDB. It compares the previous
+key and saves the replacement in one transaction. A failed local write can be
+retried in the same open dialog before expiry.
+Ordinary settings saves preserve the key already in IndexedDB unless the user
+edits that field. Other tabs reread the key after a save notification. The
+notification contains no key, and a tab keeps any unsaved key edit.
+If the claim response is lost, start a new transfer. The sender reads the local
+saved key directly, so a draft or embedded build key is never sent. Neither the
+session nor the key is saved in the server library or shared user state.
+
 ## Module Layout
 
 Framework-free code lives in `libs/shared/tmdb/` (`@iptvnator/shared/tmdb`,
@@ -125,6 +155,19 @@ after the asynchronous module load. A module-load failure leaves provider
 metadata intact. Offline detail mapping imports the pure secondary entry
 statically inside its already-lazy feature. These entries preserve the startup
 bundle budget while keeping the existing synchronous merge contracts.
+The metadata client and ID resolver load confidence-matching functions when
+an asynchronous lookup needs them. Matching rules, lookup keys and client cache
+lifetimes remain unchanged; the optional matcher stays off the startup graph.
+Cache trimming imports the shared aggregate-role selector from
+`tmdb-aggregate-role.ts`, independently of the credit presentation module.
+The synchronous selector stays unchanged. Credit presentation functions use
+the public `@iptvnator/shared/tmdb/credits` entry, outside the shared/services
+eager barrels; cache users do not pull cast formatting into the initial graph.
+The public pure matching entry is `@iptvnator/shared/tmdb/matcher`; eager shared
+and services barrels retain only the lightweight title helpers and matcher types.
+The season facade is resolved through the existing injector only on the first
+season lookup, preserving its singleton/cache behavior while keeping season
+response handling off the startup path.
 
 ## Match Confidence
 
@@ -175,9 +218,11 @@ Wrong metadata is worse than no metadata, so id resolution is conservative:
    must be unambiguous (single hit).
 4. Several admitted results are ranked by **year evidence first**
    (`yearEvidenceTier`): the provider's exact year beats a year off by one,
-   which beats the series "premiered earlier" tolerance. Popularity
-   (`vote_count`, then `popularity`) only breaks ties inside the strongest
-   tier any candidate reached.
+   which beats the series "premiered earlier" tolerance. The strongest tier
+   must contain exactly one result; a tie leaves the provider metadata intact.
+   Popularity and vote counts cannot identify two unrelated productions with
+   the same localized title and release year. A tie preserves provider data
+   until the user explicitly chooses the correct match.
 
    The tolerance is a last resort, not an equal. Ranked alongside the
    exact-year tier it handed every new series its older, better-known
@@ -216,6 +261,67 @@ language is different. This covers English translations of foreign shows whose
 localized and original names both differ (for example, The Chestnut Man).
 The same strict title/year gate applies, each language caches its own verdict,
 and details still use the user's selected metadata language.
+
+## Manual match correction
+
+The Stalker and Xtream movie/series detail overflow menus offer **Correct TMDB
+match…** when TMDB is enabled and a key is configured. The shared lazy dialog
+uses the existing dialog shell and app theme tokens. Search stays within the
+item's media type and shows posters, original titles, release years and TV
+origin countries (original language for movies). A failed request offers Retry;
+empty results still allow provider-only or automatic mode. Selection is explicit,
+and Cancel/Escape never writes a choice.
+
+`TmdbMatchService` stores each choice in a separate local Web Storage key:
+`iptvnator:tmdb-match:v1:` plus a JSON tuple of provider, playlist ID, TMDB media
+type and provider item ID. Regular Stalker series append a `series` catalog
+discriminator; embedded/lazy VOD series retain the VOD key so existing choices
+survive. IDs from different sources, media types and Stalker catalogs cannot
+collide. Choices are local to this installation/browser origin, outside the TMDB
+cache and playlist backup format. Clearing the metadata cache leaves them intact.
+Storage failures leave the dialog open and do not change the visible selection.
+
+The choice service is a lazy public entry point, `@iptvnator/services/tmdb-match`;
+the main services barrel exports its types only. `TmdbEnrichmentService.getMatches()`
+loads it for an item-scoped detail request, keeping saved-choice storage off the
+initial renderer graph. Generic automatic queries do not load it. Selection
+helpers recheck ownership after loading before registering refresh callbacks.
+If that chunk cannot load, item-scoped enrichment retains provider data rather
+than guessing over an unavailable saved choice.
+
+- **Choose in TMDB:** validate the chosen ID's details, then persist that ID.
+  `getDetailsForMatch` honors opt-in, localization and the normal details cache,
+  bypassing automatic title/year corroboration for this explicit user decision.
+  Placeholder or missing provider titles do not prevent an explicit match.
+  A failed manual lookup keeps provider metadata; it never guesses another ID.
+- **Provider data:** persist a provider-only verdict, restore original editorial
+  fields and skip show/movie TMDB lookup for this item.
+- **Automatic:** remove only this item's choice and rerun the normal resolver.
+
+The existing selection enrichment helpers register one refresh callback per
+owning store. Explicit changes reapply from the captured provider metadata while
+preserving playback/source identity. Stalker retains that metadata as
+`info.tmdb_provider_info` in enriched favorite/recent snapshots; normalization
+preserves it, so reopening can undo the enrichment. Historical enriched snapshots
+written before this field existed have no recoverable original metadata until
+the portal supplies a fresh item. Xtream restores the original provider episode
+map and resets its season metadata status/overviews/posters when changing a
+series match. Provider-only choices also skip lazy season enrichment, including
+when the provider supplied a TMDB ID. Stalker's season overlays are already keyed by TMDB ID.
+Xtream manual enrichment retains the provider's original identity claims in
+`info.tmdb_provider_identity`, including an empty object when none were supplied.
+The shared content metadata adapter uses those claims for favorite/recent lookup
+and write-once catalog backfill; the selected TMDB ID remains display metadata.
+Existing favorites therefore survive corrections while conflicting provider
+claims still trigger the normal reused-ID guard. The marker survives JSON
+snapshots and is removed when restoring raw provider or automatic metadata.
+Per-item revisions and source/selection guards reject responses started under
+an older choice. Menus do not expose this action for live/radio or the TV app.
+
+Regression coverage includes `tmdb-match.service.spec.ts`,
+`stalker-tmdb-enrichment.spec.ts`, `xtream-tmdb-enrichment.spec.ts`,
+`tmdb-match-dialog.component.spec.ts`, `apps/web-e2e/src/tmdb-match.e2e.ts` and
+`apps/web-e2e/src/xtream-tmdb-match.e2e.ts`.
 
 ## Age classifications in movie and series details
 
@@ -305,12 +411,23 @@ component for detail→detail navigation.
 portals: recommendations are matched against ALL imported Xtream
 playlists with one batched match (`DB_MATCH_TITLES`, sent in small
 requests, see "Sending a batched match"; Electron only,
-same two-tier + year rule). Stalker detail views — where the local
-catalog is server-paginated and unmatchable — get their "Similar" rail
-purely from these cross-portal matches (shared `VodDetailsComponent` for
-movies, `stalker-series-view` for series); Xtream detail views append
-them after the local-catalog matches, deduplicated by normalized title,
-with the source playlist name on each card.
+same two-tier + year rule). Stalker and Xtream detail views append these
+matches after matches from the current catalog and remove duplicates.
+The cross-portal cards carry the source playlist name.
+
+The Stalker catalog is paginated by the portal. While TMDB is enabled,
+Stalker details search the first page for up to four recommended titles
+through the existing portal request flow. Film recommendations search
+VOD films. Series recommendations search the regular series catalog and
+VOD series, keeping the destination's catalog type for episode loading.
+Only unambiguous matches by normalized title, media type and compatible
+year appear. Without an explicit release year, a conflicting release tag
+in a title alias can disqualify the row. The search works in Electron and
+the PWA, runs independently of details and playback, and stops starting
+new requests when the selection changes. Category locks are checked when
+rendering and opening a recommendation. In both Stalker and Xtream movie
+and series details, the rail follows Cast & crew. With no visible matches
+the rail stays hidden.
 The `language` param derives from the app language setting
 (`Language` enum → TMDB code, e.g. `de` → `de-DE`); cache rows are keyed per
 language, so switching the app language re-fetches localized metadata.
@@ -626,7 +743,7 @@ tmdb_metadata (
   media_type  'movie' | 'tv' | 'person',
   lookup_key  'id:<tmdbId>|v2'               -- details payload row
               'id:<tmdbId>|season:<n>'       -- season payload row
-              'title:<query lowercased>|year:<y>|v4' -- search resolution row
+              'title:<query lowercased>|year:<y>|v5' -- search resolution row
               'person:<personId>'            -- person payload row
               'trending:week'                -- trending list row
               'badProviderId:<tmdbId>'       -- id confirmed 404 by TMDB
@@ -641,7 +758,7 @@ tmdb_metadata (
 TTLs (enforced at read time in `TmdbCacheService.isFresh`): details and
 positive matches 30 days, negative matches 7 days.
 
-Search keys carry a `|v4` and details keys a `|v2` version suffix
+Search keys carry a `|v5` and details keys a `|v2` version suffix
 (`buildSearchLookupKey` / `buildDetailsLookupKey` in `tmdb-matcher.ts`): for
 search rows so normalization or query changes cannot reuse stale positive or
 negative resolutions, for details rows because payloads now include videos
@@ -649,8 +766,11 @@ via `append_to_response` and pre-videos cache rows had to be invalidated.
 Search v2 → v3 retired the rows written while the folded comparison key was
 also the wire query (see "Search query vs. comparison key" below); v3 → v4
 retired the rows resolved before year evidence was tiered, where a positive
-row naming the wrong show would otherwise stay fresh for 30 days. Database
-startup deletes the rows of every retired search-key generation once, each
+row naming the wrong show would otherwise stay fresh for 30 days. The v4 → v5
+bump retires popularity-based tie verdicts. Old v4 rows are
+unreachable and can be removed through the existing Clear TMDB cache action;
+this change does not migrate or rewrite stored provider data. Database
+startup deletes the pre-v4 search rows once, each
 under its own `app_state` marker so a skipped release still runs the cleanups
 it missed (`migration:tmdb-search-lookup-v2-cache-cleanup:v1` for the
 unversioned rows, `…-v3-…` for the `|v2` rows, `…-v4-…` for the `|v3` rows;
@@ -666,7 +786,7 @@ both sides fold the same way. `query` is `cleanTitleForSearch`
 stripping, but the letters left as the provider wrote them. The search's
 identity is the query with only its case removed (`searchQueryIdentity`):
 variants are deduplicated by it and every attempted variant is cached under
-its own key (`title:<identity>|year:<y>|v4`, in the language that variant
+its own key (`title:<identity>|year:<y>|v5`, in the language that variant
 was searched in), never by the folded key and never only under the first
 variant — "Леика" and "Лейка", an illustrative pair, fold to one key while
 staying two different searches that can get different answers, so a verdict

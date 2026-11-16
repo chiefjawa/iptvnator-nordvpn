@@ -205,7 +205,9 @@
         "package": {
             "dependsOn": [
                 "electron-backend:build",
-                "electron-backend:generate-builder-metadata"
+                "electron-backend:generate-builder-metadata",
+                "web-backend:build",
+                "web:build-hosted"
             ],
             "executor": "nx-electron:package",
             "options": {
@@ -226,7 +228,9 @@
         "make": {
             "dependsOn": [
                 "electron-backend:build",
-                "electron-backend:generate-builder-metadata"
+                "electron-backend:generate-builder-metadata",
+                "web-backend:build",
+                "web:build-hosted"
             ],
             "executor": "nx-electron:make",
             "options": {
@@ -272,21 +276,20 @@
             "command": "eslint \"apps/electron-backend/**/*.ts\" \"apps/electron-backend/src/app/services/embedded-mpv-frame-copy-runtime.ts\" \"apps/electron-backend/src/app/services/embedded-mpv-frame-copy-runtime/**/*.ts\""
         },
         "test": {
-            "executor": "@nx/jest:jest",
-            "outputs": ["{workspaceRoot}/coverage/{projectRoot}"],
+            "dependsOn": ["electron-test-tools:ensure-electron-binary"],
             "inputs": [
                 "default",
                 "^production",
+                "{workspaceRoot}/tools/testing/electron/**/*",
                 "{workspaceRoot}/jest.preset.js",
                 "{workspaceRoot}/tools/embedded-mpv/linux-source-archive-contract.cjs",
                 "{workspaceRoot}/tools/embedded-mpv/linux-source-archive-contract.d.cts",
                 "{workspaceRoot}/tools/embedded-mpv/runtime-probe-contract.cjs",
-                "{workspaceRoot}/tools/embedded-mpv/runtime-probe-contract.d.cts"
-            ],
-            "options": {
-                "jestConfig": "apps/electron-backend/jest.config.ts"
-            }
+                "{workspaceRoot}/tools/embedded-mpv/runtime-probe-contract.d.cts",
+                {
+                    "externalDependencies": ["jest", "@nx/jest", "ts-jest"]
+                }
+            ]
         }
-    },
-    "tags": ["scope:electron", "domain:electron-main", "type:app"]
+    }
 }

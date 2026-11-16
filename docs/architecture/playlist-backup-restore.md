@@ -61,7 +61,11 @@ playlist object graph is not the backup format.
 
 ### Xtream
 
-Xtream backups export only connection metadata plus portable user state.
+Xtream backups export connection metadata, desktop catalog selection, and portable user state.
+The optional top-level `xtreamContentTypes` array contains `live`, `movie`, and/or
+`series`; an empty array loads no catalogs, while absence retains legacy all-types
+behavior. Restore validates this field and replaces the destination's selection.
+Browser import preserves the metadata but does not apply desktop catalog filtering.
 
 - Connection metadata:
     - `serverUrl`
@@ -86,8 +90,95 @@ is unavailable. Re-export neither applies nor consumes the pending snapshot,
 so it also works before the portal has been opened and in browser runtimes.
 Parental category locks still come from the current lock store.
 
+The settings facade supplies an export-only position projector when viewing
+activity is enabled. Normal Xtream exports overlay the durable shared projection
+on the strictly read local positions, including pending offline progress and reset
+barriers. Watched marks are encoded as complete legacy progress so either runtime
+can restore them; player session IDs and action markers are omitted. A pending
+restore snapshot remains authoritative and bypasses the projector. Projection
+failures fail export. Restore writes remain local and do not acquire sync consent.
+
+For desktop sources whose restored selection omits catalogs, history and hidden
+category choices without an available catalog are parked separately under
+`xtream-catalog-restore-<playlistId>`. This dormant record does not keep the source
+in an active/failed import state. Re-export merges it with the current complete
+history and category choices without consuming it. Re-enabling types merges their
+parked data into the cache-refresh snapshot and consumes only the history
+identities and category choices actually applied; it never replays old favorite
+removals, positions or source pins. Existing cached
+catalogs can accept their data even when their import selection is disabled.
+Explicit native history replay returns the typed identities it actually restored,
+including retained rows in an unfinished disabled catalog. Both immediate and
+pending archive restoration consume those identities from dormant history before
+flushing DOM storage. Missing identities and unavailable category choices remain
+parked, including missing identities within an otherwise completed catalog.
+Preparation retains them before replay; a catalog being available is not proof
+that any individual item or category was applied. Missing or malformed replay
+evidence fails without consuming the pending archive, so later watches and removals cannot leave a stale dormant duplicate.
+A new explicit archive has fresh receipt ownership and replaces older deferred
+choices. Explicit history clearing and source deletion clear corresponding dormant
+data. Storage failures retain the original active restore for retry rather than
+acknowledging an incomplete restore.
+
+Dormant records use the active source profile's storage prefix, including the
+server instance ID in connected desktop mode. Export, replay, history clearing
+and source deletion only read or mutate that profile. A replay snapshot also
+retains its storage key, so switching profiles cannot consume an identical record
+owned by another server. Standalone records keep their existing unprefixed keys;
+they are not adopted by an unrelated server profile.
+Electron Settings bulk deletion also clears dormant records after the native
+delete succeeds; a failed delete retains them. Shared-source deletion keeps its
+conditional per-source cleanup so newer sources in another tab remain untouched.
+
 A failed pending-storage, recent-history or playback-position read fails export.
 An unreadable collection must never be serialized as a successful empty collection.
+
+Edit-time and ordinary Refresh cache recovery use an internal `preservePlaybackPositions: true`
+policy because catalog replacement leaves position rows intact. Retry keeps the
+current rows, including progress, additions and removals made after a failure.
+Export during that recovery reads current positions rather than the parked
+snapshot. The policy is excluded from archives and cleared on explicit backup
+import, which still restores the archive's authoritative positions.
+Its native history journal lives in profile-scoped SQLite `app_state`, using the
+`xtream-history-recovery:` key prefix. Current watch updates and explicit removals
+or clears update that journal in the same transaction as live history. Export
+uses its current history and excludes already-owned or removed dormant entries;
+explicit backup import clears the journal after parking the new archive and
+passing restore preflight. Pending explicit-archive retries repeat that reset
+before replay, and fail without changing history if it is still unavailable.
+Older cache-only pending records migrate their unfinished-type history into the
+journal before import or re-export; completed retained types keep current rows.
+Cache replay is atomic and keeps the journal until
+deferred state completes, so retry cannot undo intervening history actions.
+Before acknowledgment, unresolved journal history is parked too, including live
+watches captured during registration whose provider items disappeared. Cache
+receipts retain their original scoped key and generation, including an initial
+null generation, even when no dormant rows remain. Replay or acknowledgment
+failure therefore does not turn the same recovery into a foreign archive.
+Each DOM write has a fresh private revision, so history clearing invalidates
+held journal replies without changing ownership or allowing an identical later
+write to match an older snapshot. Capture creates an empty receipt before native
+registration so global history clearing also covers an active empty recovery.
+A new explicit archive always has a fresh durable generation, including an empty
+archive; source deletion removes receipts. These markers are excluded from exports.
+Cache-pending exports reconcile hidden flags by current category identity too:
+live visibility wins for present categories, while absent categories retain
+their parked choices.
+Explicit user visibility changes additionally live in the profile-scoped native
+`xtream-category-visibility:` ledger, committed atomically with category updates.
+Its typed hide/show choices override dormant state even when an interrupted
+catalog is disabled or its rows disappear. Untouched partial-import defaults do
+not override dormant choices. Reimport honors the ledger, and export serializes
+the reconciled hidden choices rather than the internal ledger. A new explicit
+backup clears older overrides after parking its pending state and passing
+preflight; retry repeats that reset. Permanent source deletion clears the ledger,
+while cache invalidation preserves it.
+An existing selective source can restore offline when every selected catalog is
+complete. Explicit restoration applies hidden flags to actual retained category
+rows, including unfinished disabled catalogs. History uses exact native identities,
+and absent items or categories remain dormant instead of requiring all three
+catalogs or consuming their parked data. An explicit empty selection needs no
+catalog cache for independent playback-position/source-pin restoration.
 
 Explicitly excluded:
 
@@ -98,7 +189,7 @@ Explicitly excluded:
 ### Stalker
 
 Stalker backups export connection metadata plus playlist-scoped favorites/recent
-state.
+state and playback positions.
 
 - Exported connection fields:
     - `portalUrl`
@@ -113,6 +204,18 @@ state.
 - Exported user state:
     - favorites snapshots
     - recently viewed snapshots
+    - optional `playbackPositions`, including shared activity and exact episode reset barriers
+
+The settings projector overlays shared activity on strictly read local positions.
+Restore atomically replaces the local position collection and remaps the source
+ID; it never uploads the archive as shared activity. Historical v1 archives with
+no `playbackPositions` field leave local positions untouched. An explicit empty
+array clears them. Invalid collections fail validation before playlist writes.
+A failed native or browser position read fails export.
+
+Stalker exports omit SQLite `null` values in optional duration and episode metadata
+fields. A zero duration remains zero, preserving exact episode reset barriers;
+unknown durations restore as nullable native columns.
 
 Explicitly excluded — session state, as opposed to the connection definition:
 
@@ -120,7 +223,6 @@ Explicitly excluded — session state, as opposed to the connection definition:
 - `stalkerSessionIdentity` (the fingerprint the token was negotiated for)
 - `stalkerWatchdogTimeout` / `stalkerTimeslot` (the profile-advertised cadence)
 - `stalkerAccountInfo`
-- playback positions in v1
 
 ### App Settings
 
@@ -175,6 +277,12 @@ If no fingerprint matches:
 - create a new playlist
 - reuse `exportedId` only when it is unused
 - otherwise generate a new UUID
+
+Reserve the ID returned by storage as soon as the playlist write succeeds,
+including before any follow-up write for a remapped ID. A later
+user-state or parental-lock restore can fail after that write; subsequent
+entries with a different source fingerprint must not reuse its ID and overwrite
+the saved playlist. A write that fails before persistence leaves the ID unused.
 
 ## Xtream Restore Contract
 
@@ -308,6 +416,12 @@ Older builds ignore `collectionItems`; the manifest version stays `1`.
 
 ## Current UX
 
+The Android TV/Fire TV shell has no Blob-to-document save bridge. The settings
+facade's `supportsExport` capability reads the `tv-shell` marker installed before
+bootstrap; both the export control and its programmatic action are gated on it.
+This runtime offers backup import only, without claiming that a backup was saved.
+Desktop native save and ordinary browser downloads retain their existing paths.
+
 The settings page now exports/imports “playlist backups” instead of the old
 raw JSON application dump.
 
@@ -344,3 +458,36 @@ Regression coverage: `playlist-backup.service.validation.spec.ts`,
 `settings-backup.facade.spec.ts`, browser `backup-restore.e2e.ts`, and Electron
 `backup-roundtrip.e2e.ts`. Browser tests use isolated contexts and fictional
 archives; Electron tests use their own temporary data root.
+
+## Optional shared favorites in exports
+
+The Settings export action supplies a separate favorites projector when the
+selected profile has used favorites sync. It exports the durable visible copy,
+including shared removals and unresolved snapshot-only Xtream memberships, without
+reading/uploading the NAS as part of export. Original raw archives remain retained
+for explicit favorites preview/import. Archive restore updates local legacy data;
+it does not implicitly authorize per-item NAS writes. Use the independent
+favorites preview/import action to publish restored local memberships.
+After a successful entry restore, Settings reconciles matching retained local
+favorite choices against the restored memberships. An older opted-out removal
+cannot hide a restored item from preview. Omitted choices, server revisions and
+queued operations remain intact; restoration itself sends no favorites writes.
+
+## Optional shared history in backups
+
+Settings also overlays the durable history sidecar when this profile has used
+history synchronization. Export includes removals and local choices, including
+unresolved typed Xtream entries, without a server request or the 100-row browse
+limit. Unrelated pre-enable local history remains included. M3U and Stalker use
+the same history projection as their collections.
+Xtream identity-conflict markers survive export and restore. Export also marks
+contradictory archived/shared TMDB or year hints before merging, so a backup
+round trip cannot make a rejected provider identity available again.
+
+Restore replaces the local history copy for previously verified sources and
+rebuilds its explicit-import archive. It preserves shared revisions and existing
+queued server operations; it creates no new uploads or consent. Each target's
+captured profile, incarnation and consent guard delayed restore work. The client
+can renew after unrelated source changes without invalidating that target.
+Sources without a history context retain the existing raw archive restore.
+The manifest stays version 1.

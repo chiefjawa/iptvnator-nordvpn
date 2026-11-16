@@ -1,4 +1,4 @@
-import { Route } from '@angular/router';
+import { Route, UrlMatcher } from '@angular/router';
 import { parentalLockXtreamCategoryGuard } from './parental-lock-category.guard';
 import { provideXtreamCatalogFacade } from './xtream-catalog-facade.service';
 import { provideXtreamWorkspaceRouteSession } from './xtream-workspace-route-session.service';
@@ -29,6 +29,17 @@ const loadXtreamMultiviewComponent: ComponentLoader = () =>
     import('./multiview/xtream-multiview.component').then(
         (c) => c.XtreamMultiviewComponent
     );
+
+const matchLiveRoute: UrlMatcher = (segments) => {
+    if (segments[0]?.path !== 'live' || segments.length > 2) {
+        return null;
+    }
+
+    return {
+        consumed: segments,
+        ...(segments[1] ? { posParams: { categoryId: segments[1] } } : {}),
+    };
+};
 
 const loadCategoryContentViewComponent: ComponentLoader = () =>
     import('@iptvnator/portal/catalog/feature').then(
@@ -86,17 +97,13 @@ export function createXtreamRoutes(): Route[] {
                     loadComponent: loadXtreamContentGateComponent,
                     children: [
                         {
-                            path: 'live',
-                            loadComponent: loadLiveStreamLayoutComponent,
-                        },
-                        {
-                            // Before `live/:categoryId`, which would
-                            // otherwise read "multiview" as a category.
+                            // Before the live matcher, which would
+                            // otherwise read "multiview" as a category id.
                             path: 'live/multiview',
                             loadComponent: loadXtreamMultiviewComponent,
                         },
                         {
-                            path: 'live/:categoryId',
+                            matcher: matchLiveRoute,
                             canActivate: [
                                 parentalLockXtreamCategoryGuard('live'),
                             ],

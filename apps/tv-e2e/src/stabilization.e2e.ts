@@ -1,5 +1,12 @@
 import { expect, test } from '@playwright/test';
-import { addSource, backend, nav, start } from './helpers';
+import {
+    fillTvField,
+    chooseTv,
+    addSource,
+    backend,
+    nav,
+    start,
+} from './helpers';
 
 test('automatic retries are bounded and a network return can restart recovery', async ({
     page,
@@ -148,7 +155,7 @@ test('settings write failure retries the save and never reconnects the provider'
         };
     });
     await page.getByRole('tab', { name: 'Appearance', exact: false }).click();
-    await page.getByLabel('Home composition').selectOption('shelf');
+    await chooseTv(page, 'Home composition', 'shelf');
     await page
         .getByRole('button', { name: 'Save settings', exact: true })
         .click();
@@ -185,7 +192,7 @@ test('one home server address can explicitly connect its shared sources', async 
         libraryReads++;
         return route.fulfill({ json: [] });
     });
-    await page.getByLabel('IPTVnator backend URL').fill(backend);
+    await fillTvField(page.getByLabel('IPTVnator backend URL'), backend);
     await page.getByRole('button', { name: 'Check and connect' }).click();
     await expect(
         page.getByRole('button', { name: 'Use this server’s sources' })

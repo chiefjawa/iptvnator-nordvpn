@@ -48,6 +48,7 @@ function createFakeController(): FakeController {
         setAspectRatio: jest.fn(),
         toggleRecording: jest.fn(),
         togglePictureInPicture: jest.fn(),
+        jumpToLiveEdge: jest.fn(),
     };
     return {
         controller: { capabilities, state, commands },
@@ -161,6 +162,56 @@ describe('PlayerControlsComponent capability contract', () => {
         expect(fake.commands.setVolume).toHaveBeenCalledWith(0.95);
     });
 
+    it.each(['dialog', 'alertdialog'])(
+        'leaves focused %s regions in charge of scrolling while a player is mounted',
+        (role) => {
+            const fake = createFakeController();
+            fake.capabilities.set({
+                ...DEFAULT_PLAYER_CAPABILITIES,
+                volume: true,
+                seek: true,
+                fullscreen: true,
+            });
+            fake.state.update((state) => ({ ...state, canSeek: true }));
+            createControls(fake, createSurface());
+            const dialog = createSurface();
+            dialog.setAttribute('role', role);
+            const region = document.createElement('div');
+            region.tabIndex = 0;
+            region.setAttribute('role', 'region');
+            dialog.appendChild(region);
+            region.focus();
+            // Ignore controller initialization before the user presses keys.
+            fake.commands.setVolume.mockClear();
+
+            for (const key of [
+                ' ',
+                'k',
+                'ArrowUp',
+                'ArrowDown',
+                'ArrowLeft',
+                'ArrowRight',
+                'f',
+                'm',
+            ]) {
+                const event = new KeyboardEvent('keydown', {
+                    key,
+                    bubbles: true,
+                    cancelable: true,
+                });
+                region.dispatchEvent(event);
+                expect(event.defaultPrevented).toBe(false);
+            }
+            expect(fake.commands.togglePlay).not.toHaveBeenCalled();
+            expect(fake.commands.seekBy).not.toHaveBeenCalled();
+            expect(fake.commands.setVolume).not.toHaveBeenCalled();
+
+            dialog.remove();
+            expect(pressKey('ArrowDown')).toBe(true);
+            expect(fake.commands.setVolume).toHaveBeenCalledWith(0.95);
+        }
+    );
+
     it('applies persisted volume before reconciling the first controller snapshot', () => {
         localStorage.setItem('volume', '0.3');
         const fake = createFakeController();
@@ -220,6 +271,7 @@ describe('PlayerControlsComponent capability contract', () => {
         const fake = createFakeController();
         const fixture = createControls(fake);
         const component = fixture.componentInstance;
+        const root = fixture.nativeElement as HTMLElement;
 
         fake.capabilities.set({
             ...DEFAULT_PLAYER_CAPABILITIES,
@@ -233,7 +285,9 @@ describe('PlayerControlsComponent capability contract', () => {
             ],
         });
         fixture.detectChanges();
-        component.settings.open('audio');
+        root.querySelector<HTMLButtonElement>(
+            '[data-test-id="player-controls-settings-button"]'
+        )?.click();
         expect(component.menus.settingsOpen()).toBe(true);
 
         fake.state.set({
@@ -248,7 +302,9 @@ describe('PlayerControlsComponent capability contract', () => {
             playbackSpeed: true,
         });
         fixture.detectChanges();
-        component.settings.open('speed');
+        root.querySelector<HTMLButtonElement>(
+            '[data-test-id="player-controls-settings-button"]'
+        )?.click();
         expect(component.menus.settingsOpen()).toBe(true);
 
         fake.capabilities.set({ ...DEFAULT_PLAYER_CAPABILITIES });

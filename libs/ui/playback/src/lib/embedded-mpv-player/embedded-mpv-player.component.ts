@@ -7,6 +7,7 @@ import {
     effect,
     inject,
     input,
+    model,
     output,
     signal,
     untracked,
@@ -32,6 +33,7 @@ import type {
     PlayerTimelineSegment,
 } from '../player-controls/player-controls.model';
 import type { SeriesPlaybackNavigation } from '../portal-inline-player/series-playback-navigation';
+import type { MultiviewSlot } from '../second-stream/second-stream-open-stream';
 import { embeddedMpvTimelineSegments } from './embedded-mpv-chapter-segments';
 import { EmbeddedMpvControlsAdapter } from './embedded-mpv-controls.adapter';
 import { EmbeddedMpvDockPanelComponent } from './embedded-mpv-dock-panel.component';
@@ -84,6 +86,15 @@ const RECORDING_MESSAGE_DISMISS_DELAY_MS = 5000;
 export class EmbeddedMpvPlayerComponent implements OnDestroy {
     readonly playback = input.required<ResolvedPortalPlayback>();
     readonly showControls = input(true);
+    readonly sharedVolumeController = input<EmbeddedMpvSessionController>();
+    readonly inactiveSurfaceClicked = output<void>();
+    readonly multiviewSlot = input<MultiviewSlot>(1);
+    readonly canOpenMultiview = input(false);
+    readonly multiviewAddRequested = output<void>();
+    readonly multiviewGridRequested = output<void>();
+    readonly initialVolumeOverride = input<number | null>(null);
+    readonly retryEnabled = input(true);
+    readonly liveSubtitlesOff = model(false);
     readonly recordingFolder = input('');
     readonly recordingMetadata = input<RecordingStartMetadata | null>(null);
     readonly seriesNavigation = input<SeriesPlaybackNavigation | null>(null);
@@ -140,7 +151,10 @@ export class EmbeddedMpvPlayerComponent implements OnDestroy {
     /** Catch-up programmes first, else the file's chapters; see the helper. */
     readonly controlsTimelineSegments = computed(
         () =>
-            embeddedMpvTimelineSegments(this.timelineSegments(), this.session()),
+            embeddedMpvTimelineSegments(
+                this.timelineSegments(),
+                this.session()
+            ),
         { equal: sameTimelineSegments }
     );
     readonly stalled = this.controller.stalled;
@@ -420,6 +434,10 @@ export class EmbeddedMpvPlayerComponent implements OnDestroy {
 
         this.sharedControls.configure({
             playback: this.playback,
+            volumeController: () =>
+                this.sharedVolumeController() ?? this.controller,
+            volumeCommandsEnabled: this.showControls,
+            selectSubtitleTrack: this.applySubtitleTrack,
             seriesNavigation: this.seriesNavigation,
             recordingFolder: this.recordingFolder,
             recordingMetadata: this.recordingMetadata,
@@ -540,7 +558,13 @@ export class EmbeddedMpvPlayerComponent implements OnDestroy {
             const teardown = this.controller.startSession(
                 viewport.nativeElement,
                 playback,
-                untracked(() => this.volume())
+                untracked(() => this.initialVolumeOverride() ?? this.volume()),
+                untracked(
+                    () =>
+                        this.liveSubtitlesOff() &&
+                        this.isLivePlayback() &&
+                        this.capabilities().subtitles
+                )
             );
             onCleanup(teardown);
         });
@@ -634,6 +658,8 @@ export class EmbeddedMpvPlayerComponent implements OnDestroy {
     }
 
     onViewportClick(event: MouseEvent): void {
+        if (!this.showControls() && event.target instanceof HTMLCanvasElement)
+            this.inactiveSurfaceClicked.emit();
         this.legacyInteractions.onViewportClick(event);
     }
 
@@ -674,6 +700,12 @@ export class EmbeddedMpvPlayerComponent implements OnDestroy {
                 `${deltaSeconds >= 0 ? '+' : ''}${Math.round(deltaSeconds)}s`
             );
         }
+    }
+
+    /** Legacy dock only; the shared controls call the adapter themselves. */
+    jumpToLiveEdge(): void {
+        this.legacyInteractions.revealControls();
+        this.sharedControls.jumpToLiveEdge();
     }
 
     requestPreviousEpisode(): void {
@@ -764,9 +796,16 @@ export class EmbeddedMpvPlayerComponent implements OnDestroy {
         this.legacyInteractions.scheduleControlsHide();
     }
 
+    private readonly applySubtitleTrack = (trackId: number): Promise<void> => {
+        if (this.isLivePlayback()) {
+            this.liveSubtitlesOff.set(trackId === -1);
+        }
+        return this.controller.setSubtitleTrack(trackId);
+    };
+
     async selectSubtitleTrack(trackId: number): Promise<void> {
         this.legacyInteractions.revealControls(false);
-        await this.controller.setSubtitleTrack(trackId);
+        await this.applySubtitleTrack(trackId);
         this.menus.close('subtitle');
         this.legacyInteractions.scheduleControlsHide();
     }
@@ -860,6 +899,7 @@ export class EmbeddedMpvPlayerComponent implements OnDestroy {
     }
 
     retry(): void {
+        if (!this.retryEnabled()) return;
         this.controller.retry();
     }
 

@@ -141,6 +141,7 @@ describe('WorkspaceShellFacade', () => {
         parseUrl: jest.Mock;
         createUrlTree: jest.Mock;
         isActive: jest.Mock;
+        currentNavigation: () => null;
         lastSuccessfulNavigation: () => { trigger: string };
     };
     let workspaceActions: {
@@ -224,7 +225,11 @@ describe('WorkspaceShellFacade', () => {
             parseUrl: jest.fn((url: string) => createParseUrl(url)),
             createUrlTree: jest.fn(),
             isActive: jest.fn(),
-            lastSuccessfulNavigation: () => ({ trigger: navigationTrigger }),
+            currentNavigation: () => null,
+            lastSuccessfulNavigation: () => ({
+                trigger: navigationTrigger,
+                extras: {},
+            }),
         };
         workspaceActions = {
             openAddPlaylistDialog: jest.fn(),
@@ -857,6 +862,27 @@ describe('WorkspaceShellFacade', () => {
         ).toContain('global-search');
     });
 
+    it('enables the global search command and input for a Stalker-only library', () => {
+        playlistsSignal.set([
+            {
+                _id: 'portal-a',
+                title: 'Fixture Stalker portal',
+                count: 0,
+                importDate: '',
+                autoRefresh: false,
+                portalUrl: 'https://portal.example.test/portal.php',
+                macAddress: '02:00:00:00:00:01',
+            },
+        ]);
+        facade.currentUrl.set('/workspace/dashboard');
+        expect(
+            facade.commandPaletteCommands().map((command) => command.id)
+        ).toContain('global-search');
+
+        facade.currentUrl.set('/workspace/search');
+        expect(facade.canUseSearch()).toBe(true);
+    });
+
     it('does not enable global search for empty invalid playlist metadata', () => {
         activePlaylistSignal.set(null);
         playlistsSignal.set([
@@ -946,6 +972,41 @@ describe('WorkspaceShellFacade', () => {
         expect(commands.some((command) => command.id === 'account-info')).toBe(
             false
         );
+    });
+
+    it('shows a portal guide action only for its owning live route and folds the category panel while it is open', () => {
+        const headerContext = TestBed.inject(WorkspaceHeaderContextService);
+        const open = signal(false);
+        const id = 'xtream-epg-guide';
+        headerContext.setAction({
+            id,
+            icon: 'grid_view',
+            tooltipKey: 'TOP_MENU.OPEN_EPG_GUIDE',
+            ariaLabelKey: 'TOP_MENU.OPEN_EPG_GUIDE',
+            owner: {
+                provider: 'xtreams',
+                playlistId: 'synthetic-portal',
+                section: 'live',
+            },
+            hidesContextPanel: open,
+            palette: { labelKey: 'TOP_MENU.OPEN_EPG_GUIDE' },
+            run: jest.fn(),
+        });
+        const commands = () =>
+            facade.commandPaletteCommands().map((command) => command.id);
+        facade.currentUrl.set('/workspace/xtreams/synthetic-portal/live/1');
+        expect(facade.headerShortcut()?.id).toBe(id);
+        expect(commands()).toContain(id);
+        expect(facade.showContextPanel()).toBe(true);
+        open.set(true);
+        expect(facade.showContextPanel()).toBe(false);
+        expect(facade.headerSidebarToggle()).toBeNull();
+        facade.currentUrl.set('/workspace/xtreams/another-portal/live/1');
+        expect(facade.headerShortcut()).toBeNull();
+        expect(commands()).not.toContain(id);
+        expect(facade.showContextPanel()).toBe(true);
+        facade.currentUrl.set('/workspace/xtreams/synthetic-portal/vod');
+        expect(facade.headerShortcut()).toBeNull();
     });
 
     it('disables the programme guide command while the header action reports disabled', () => {

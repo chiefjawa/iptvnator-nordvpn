@@ -111,7 +111,7 @@
 }
 
 <div class="content-container">
-    @if (isSidebarCollapsed()) {
+    @if (isSidebarCollapsed() && !isItvOverviewVisible()) {
         <button
             #restoreButton
             mat-icon-button
@@ -120,6 +120,20 @@
             [attr.aria-label]="'LAYOUT.SHOW_PANELS' | translate"
             [matTooltip]="'LAYOUT.SHOW_PANELS_TOOLTIP' | translate"
             (click)="livePanels.toggleSidebar()"
+        >
+            <mat-icon>chevron_right</mat-icon>
+        </button>
+    }
+    @if (showContentCategoriesButton()) {
+        <button
+            #contentShowCategoriesButton
+            mat-icon-button
+            type="button"
+            class="sidebar-restore"
+            data-test-id="live-show-categories"
+            [attr.aria-label]="'LAYOUT.SHOW_CATEGORIES' | translate"
+            [matTooltip]="'LAYOUT.SHOW_CATEGORIES' | translate"
+            (click)="livePanels.showCategories()"
         >
             <mat-icon>chevron_right</mat-icon>
         </button>
@@ -133,7 +147,17 @@
                 [loading]="isFullListLoading()"
                 [progress]="fullListProgress()"
                 [searchTerm]="searchTerm()"
-                (channelActivated)="playChannel($event)"
+                [sidebarCollapsed]="isSidebarCollapsed()"
+                [categoriesFolded]="livePanels.isCategoriesRailFolded()"
+                [showEpg]="supportsProviderEpg"
+                [epgLoading]="stalkerStore.isLoadingBulkItvEpg()"
+                [epgPrograms]="epgPreviewPrograms"
+                [epgProgress]="currentProgramsProgress"
+                (restorePanels)="livePanels.toggleSidebar()"
+                (showCategories)="livePanels.showCategories()"
+                (visibleChannelsChanged)="overviewVisibleChannels.set($event)"
+                (previewRefreshRequested)="scheduleEpgPreviewRefresh()"
+                (channelActivated)="playChannel($event, true)"
             />
         } @else {
             <app-portal-empty-state

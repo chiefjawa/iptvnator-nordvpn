@@ -13,7 +13,7 @@ import {
 test.use({ serviceWorkers: 'block' });
 
 test.beforeEach(async ({ page, request }) => {
-    await request.post(`${MOCK_SERVER}/reset`);
+    await request.post(`${MOCK_SERVER}/reset?username=user1&password=pass1`);
     await page.route('**/assets/app-config.js', (route) =>
         route.fulfill({
             contentType: 'application/javascript',
@@ -569,7 +569,7 @@ test('@xtream @collections cold shared live playback records the selected favori
     }, id);
     await page.reload();
     await expect(
-        row.getByRole('button', { name: 'Played favorite B', exact: true })
+        row.getByRole('button', { name: /^Played favorite B\b/ })
     ).toHaveAttribute('aria-disabled', 'true');
     await row.click({ button: 'right' });
     await expect(page.getByRole('menuitem')).toHaveCount(1);

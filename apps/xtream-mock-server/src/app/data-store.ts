@@ -1,3 +1,14 @@
+import { detailCacheKey, portalIdentityKey } from './account-identity.js';
+import {
+    portalCache,
+    vodDetailsCache,
+    seriesInfoCache,
+} from './portal-caches.js';
+export {
+    resetAll,
+    resetAccount,
+    getDetailCacheCardinalityForTesting,
+} from './portal-caches.js';
 import { faker } from '@faker-js/faker';
 import { generateCategories } from './generators/categories.generator.js';
 import {
@@ -47,10 +58,6 @@ export interface PortalData {
     seriesItems: RawSeriesItem[];
     epgListingsByStreamId: Map<number, RawEpgListing[]>;
 }
-
-const portalCache = new Map<string, PortalData>();
-const vodDetailsCache = new Map<string, RawVodDetails>();
-const seriesInfoCache = new Map<string, RawSeriesInfo>();
 
 function generatePortalData(username: string, password: string): PortalData {
     const scenario = getScenario(username, password);
@@ -140,7 +147,7 @@ function generatePortalData(username: string, password: string): PortalData {
 }
 
 export function getPortalData(username: string, password: string): PortalData {
-    const key = `${username}:${password}`;
+    const key = portalIdentityKey(username, password);
     if (!portalCache.has(key)) {
         portalCache.set(key, generatePortalData(username, password));
     }
@@ -232,32 +239,9 @@ export function getShortEpgListings(
     return listings.slice(startIndex, startIndex + Math.max(1, limit));
 }
 
-export function resetAll(): void {
-    portalCache.clear();
-    vodDetailsCache.clear();
-    seriesInfoCache.clear();
-}
-
-/** Test-only cache sizes; never exposes credential-bearing keys or fixture data. */
-export function getDetailCacheCardinalityForTesting(): Readonly<{
-    vodDetails: number;
-    seriesInfo: number;
-}> {
-    return {
-        vodDetails: vodDetailsCache.size,
-        seriesInfo: seriesInfoCache.size,
-    };
-}
-
-function detailCacheKey(
-    username: string,
-    password: string,
-    itemId: number
-): string {
-    return `${username}:${password}:${itemId}`;
-}
-
-function buildTimezoneFixture(pastTitle: string): Pick<
+function buildTimezoneFixture(
+    pastTitle: string
+): Pick<
     PortalData,
     'liveCategories' | 'liveStreams' | 'epgListingsByStreamId'
 > {
@@ -328,7 +312,6 @@ function buildTimezoneNewsEpg(
     pastTitle: string
 ): RawEpgListing[] {
     const now = Math.floor(Date.now() / 1000);
-    const roundedNow = now - (now % (15 * 60));
     const nextUtcMidnight = getFutureUtcMidnight(now);
     const rawStringOffsetSeconds = -2 * 60 * 60;
     const channelId = `channel-${streamId}.mock`;
@@ -339,32 +322,32 @@ function buildTimezoneNewsEpg(
             title: pastTitle,
             description:
                 'Past schedule item used to anchor current-program detection.',
-            startTimestamp: roundedNow - 75 * 60,
-            stopTimestamp: roundedNow - 15 * 60,
+            startTimestamp: now - 75 * 60,
+            stopTimestamp: now - 15 * 60,
         },
         {
             id: `${streamId}-current`,
             title: 'Global Headlines',
             description:
                 'Current program for list-row and detail EPG assertions.',
-            startTimestamp: roundedNow - 15 * 60,
-            stopTimestamp: roundedNow + 15 * 60,
+            startTimestamp: now - 15 * 60,
+            stopTimestamp: now + 15 * 60,
         },
         {
             id: `${streamId}-next`,
             title: 'Market Wrap',
             description:
                 'Immediate next program for short-EPG preview assertions.',
-            startTimestamp: roundedNow + 15 * 60,
-            stopTimestamp: roundedNow + 45 * 60,
+            startTimestamp: now + 15 * 60,
+            stopTimestamp: now + 45 * 60,
         },
         {
             id: `${streamId}-later`,
             title: 'Overnight Update',
             description:
                 'Later same-day program for selected-channel list coverage.',
-            startTimestamp: roundedNow + 45 * 60,
-            stopTimestamp: roundedNow + 75 * 60,
+            startTimestamp: now + 45 * 60,
+            stopTimestamp: now + 75 * 60,
         },
         {
             id: `${streamId}-boundary-1`,

@@ -226,6 +226,35 @@ scenarios, transports, actions, categories, occurrences, and delays
 (`0..5000` ms) use closed validation. Duplicate IDs/matches and already-past
 occurrences fail closed.
 
+### Normal-mode test isolation
+
+`POST /reset?username=<u>&password=<p>` evicts only that credential tuple:
+portal data (including EPG), VOD details, eagerly/lazily cached series details,
+and the account's stream-drop bookkeeping. Both parameters must be non-empty
+single strings; incomplete, empty, or repeated identities return `400` without
+clearing anything. Cache keys encode credential tuples, so colons and common
+prefixes cannot make two accounts share entries. Stream-drop state includes
+both credentials and episode ID; a reset detaches pending cut callbacks so
+they cannot repopulate the new account state.
+
+Web specs use scoped resets. The PWA source consumers use
+`apps/web-e2e/src/pwa-mock.fixture.ts`: each test receives a unique
+`pwa-<32 lowercase hex digits>:pass1` account, mapped to the existing
+`user1:pass1` scenario and seed. Setup and teardown reset only its resources;
+teardown closes the browser context before releasing them. Existing serial
+Xtream suites retain their scenario credentials and read-only catalogs, but
+scope setup resets to those credentials rather than clearing unrelated
+accounts. Browser local/IndexedDB storage remains per context. The separate
+server-storage suite keeps its existing per-run backend directory and serial
+library lifecycle; this fixture never resets that backend.
+
+`pwa-mock-isolation.e2e.ts` runs two parallel scenarios with deliberately
+overlapping session lifetimes and an awaited scoped reset inside each journey.
+It verifies the other Stalker session/favorite survives. The mock unit suite
+additionally pins all three Xtream cache identities and same-episode stream
+refusals across a concurrent reset/read. These deterministic regressions prove
+isolation; they do not establish that shared resets caused a past flaky run.
+
 The legacy unauthenticated `POST /reset` remains available in normal mode. It
 returns `410` while the control plane is enabled, preventing cache invalidation
 that would leave the controller's prepared manifest stale. Performance runs
@@ -415,7 +444,9 @@ sometimes only respond to that misspelled action.
 This scenario is reserved for Xtream EPG tests:
 
 - live category `EPG Focus` contains deterministic channels such as `Timezone News`
-- `Timezone News` serves a fixed `get_short_epg` window and a full `get_simple_data_table` schedule
+- `Timezone News` serves a `get_short_epg` window and a full
+  `get_simple_data_table` schedule. The current programme ends 15 minutes
+  after the fixture is generated so it stays on air throughout the test.
 - the full schedule includes a program that spans a UTC midnight boundary and another program after midnight
 - raw `start` / `end` strings are intentionally offset from `start_timestamp` / `stop_timestamp`
 
@@ -446,14 +477,16 @@ This scenario is reserved for release screenshots and marketing materials:
 
 - VOD and series data use 65 curated fictional titles instead of faker-generated
   titles or real media metadata
-- the core 30-title generated artwork pack keeps matched posters and backdrops;
-  35 additional movie-poster showcase titles use approved local poster PNGs and
-  the deterministic SVG fallback for their missing backdrops; the newest 20
-  appear first in the VOD catalog
+- the cinematic pack adds six backdrops, two series posters and two episode
+  stills to the existing original artwork; the newest 20 movie-poster showcase
+  entries appear first in the VOD catalog; missing artwork retains SVG fallback
 - showcase metadata comes from the provider-neutral
   `@iptvnator/shared/marketing-fixtures` catalog shared with the Stalker mock
-- posters and backdrops are served from committed PNG files in
-  `apps/xtream-mock-server/public/marketing/{poster,backdrop}/`
+- posters, backdrops and episode stills are served from committed PNG files in
+  `apps/xtream-mock-server/public/marketing/{poster,backdrop,episode}/`
+- cinematic prompts and provenance live in `cinematic-artwork.json` under that
+  asset root; the [cinematic demo guide](../development/cinematic-demo.md)
+  documents the disposable profile, synthetic cache, capture and validation
 - `tools/release/generate-marketing-artwork.ts` generates the PNGs with
   `gpt-image-2` only when `OPENAI_API_KEY` is present; it also writes the
   prompt/asset manifest at `apps/xtream-mock-server/public/marketing/manifest.json`
@@ -464,8 +497,36 @@ This scenario is reserved for release screenshots and marketing materials:
   `tools/release/capture-release-screenshots.ts` consumes the local mock server
   assets and never calls OpenAI; its guards additionally verify that the
   service answering on the mock port really is this fixture server
+- `marketing-stories.ts` supplies individual names and plots for the cinematic
+  series across three seasons; season covers reuse each series poster and
+  episodes use original stills or the matching series backdrop
 - the SVG renderer in `marketing.generator.ts` remains the fallback for missing
-  assets, live logos, season covers, and episode thumbnails
+  assets and live logos
+
+### Fictional TMDB API
+
+Normal mode installs `src/app/tmdb-fixtures.ts` alongside the TV media fixtures.
+The `/tmdb/3` API derives movie and series metadata from the existing marketing
+generators, keeping titles, provider IDs, dates, descriptions, genres, ratings
+and credits consistent. Fictional country data, deterministic person IDs and
+SVG portraits complete the detail layout without real accounts or metadata.
+
+- `GET /tmdb/3/configuration` supplies a key-validation response.
+- `GET /tmdb/3/search/movie` and `/search/tv` match exact case-insensitive
+  marketing titles via `query`; unknown titles return an empty result.
+- `GET /tmdb/3/movie/:id` and `/tv/:id` return metadata and appended credits.
+- `GET /tmdb/3/tv/:id/season/:season` returns the curated episode names,
+  descriptions and still paths.
+- `GET /tmdb/3/person/:id` returns a fictional biography and combined credits.
+- `GET /tmdb/t/p/:size/:kind/:slug` serves local synthetic portraits or redirects
+  to the existing local poster, backdrop and episode artwork routes.
+
+Unknown detail/person/season IDs return 404. Keys and tokens are ignored; no
+request is forwarded to TMDB. Performance-control mode does not install these
+routes. `apps/tv-e2e/src/marketing-tmdb.ts` intercepts the normal TMDB API/image
+origins for the presentation scenario, so production clients retain their
+existing TMDB configuration and opt-in behavior. The browser's external-request
+guard remains active for everything else.
 
 ### `performance:performance` fixture details
 

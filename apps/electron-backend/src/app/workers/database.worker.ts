@@ -1,3 +1,10 @@
+import { historyLocalOperation } from '../database/operations/history-local.operations';
+import type { HistoryLocalRequest } from '@iptvnator/shared/interfaces/history-sync';
+import type { FavoriteLocalRequest } from '@iptvnator/shared/interfaces/favorites-sync';
+import { favoriteLocalOperation } from '../database/operations/favorites-local.operations';
+import type { ActivityLocalRequest } from '@iptvnator/shared/interfaces/activity-sync';
+import { activityLocalOperation } from '../database/operations/activity-local.operations';
+import { getWorkerSqlite } from './database.worker-connection';
 import type {
     ElectronBridgeFavoriteReorderUpdate,
     XtreamFavoriteRemovalRef,
@@ -87,6 +94,11 @@ import {
     upsertAppPlaylists,
 } from '../database/operations/playlist.operations';
 import { setPlaylistServerTimezone } from '../database/operations/playlist-server-timezone.operations';
+import { checkXtreamCatalogConnection } from '../database/operations/xtream-catalog-state';
+import type {
+    XtreamCatalogStateCondition,
+    XtreamContentType,
+} from '@iptvnator/shared/interfaces';
 import {
     addRecentItem,
     clearPlaylistRecentItems,
@@ -427,6 +439,22 @@ async function executeRequest(
     const db = await getWorkerDatabase();
 
     switch (message.operation) {
+        case 'DB_HISTORY_LOCAL':
+            return historyLocalOperation(
+                getWorkerSqlite(),
+                message.payload as HistoryLocalRequest
+            );
+        case 'DB_FAVORITES_LOCAL':
+            return favoriteLocalOperation(
+                getWorkerSqlite(),
+                message.payload as FavoriteLocalRequest
+            );
+        case 'DB_ACTIVITY_LOCAL':
+            return activityLocalOperation(
+                getWorkerSqlite(),
+                message.payload as ActivityLocalRequest
+            );
+
         case 'DB_HAS_CATEGORIES': {
             const payload = message.payload as {
                 playlistId: string;
@@ -486,11 +514,13 @@ async function executeRequest(
             const payload = message.payload as {
                 categoryIds: number[];
                 hidden: boolean;
+                explicit?: boolean;
             };
             return updateCategoryVisibility(
                 db,
                 payload.categoryIds,
-                payload.hidden
+                payload.hidden,
+                payload.explicit === true
             );
         }
 
@@ -613,13 +643,17 @@ async function executeRequest(
                 playlistId: string;
                 contentType?: 'live' | 'movie' | 'series';
                 identity?: ContentMetadataPatch;
+                categoryId?: number;
+                excludeLocked?: boolean;
             };
             return getContentByXtreamId(
                 db,
                 payload.xtreamId,
                 payload.playlistId,
                 payload.contentType,
-                payload.identity
+                payload.identity,
+                payload.categoryId,
+                payload.excludeLocked === true
             );
         }
 
@@ -825,7 +859,7 @@ async function executeRequest(
                 },
                 async (controller) => {
                     controller.emitStarted({
-                        phase: DB_OPERATION_PHASES.DELETING_FAVORITES,
+                        phase: DB_OPERATION_PHASES.DELETING_CONTENT,
                         current: 0,
                     });
 
@@ -853,9 +887,25 @@ async function executeRequest(
             return getAppState(db, payload.key);
         }
 
+        case 'DB_CHECK_XTREAM_CATALOG_CONNECTION': {
+            const payload = message.payload as {
+                condition: XtreamCatalogStateCondition;
+            };
+            return checkXtreamCatalogConnection(db, payload.condition);
+        }
+
         case 'DB_SET_APP_STATE': {
-            const payload = message.payload as { key: string; value: string };
-            return setAppState(db, payload.key, payload.value);
+            const payload = message.payload as {
+                key: string;
+                value: string;
+                condition?: XtreamCatalogStateCondition;
+            };
+            return setAppState(
+                db,
+                payload.key,
+                payload.value,
+                payload.condition
+            );
         }
 
         case 'DB_GET_TMDB_METADATA': {
@@ -957,7 +1007,7 @@ async function executeRequest(
                     controller.emitStarted({
                         phase: DB_OPERATION_PHASES.DELETING_FAVORITES,
                         current: 0,
-                        total: 7,
+                        total: 6,
                     });
 
                     const result = await deleteAllPlaylists(
@@ -967,8 +1017,8 @@ async function executeRequest(
 
                     controller.emitCompleted({
                         phase: DB_OPERATION_PHASES.DELETING_PLAYLISTS,
-                        current: 7,
-                        total: 7,
+                        current: 6,
+                        total: 6,
                     });
 
                     return result;
@@ -980,6 +1030,7 @@ async function executeRequest(
             const payload = message.payload as {
                 playlistId: string;
                 operationId?: string;
+                contentTypes?: XtreamContentType[];
             };
             const capturePhase =
                 createWorkerPerformancePhaseAdapter(performanceCapture);
@@ -1001,7 +1052,8 @@ async function executeRequest(
                         db,
                         payload.playlistId,
                         controller.control,
-                        capturePhase
+                        capturePhase,
+                        payload.contentTypes
                     );
 
                     controller.emitCompleted({
@@ -1129,8 +1181,11 @@ async function executeRequest(
             return clearRecentlyViewed(db);
 
         case 'DB_GET_RECENT_ITEMS': {
-            const payload = message.payload as { playlistId: string };
-            return getRecentItems(db, payload.playlistId);
+            const payload = message.payload as {
+                playlistId: string;
+                all?: boolean;
+            };
+            return getRecentItems(db, payload.playlistId, payload.all === true);
         }
 
         case 'DB_ADD_RECENT_ITEM': {

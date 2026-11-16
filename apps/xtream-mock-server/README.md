@@ -20,9 +20,29 @@ pnpm run serve:marketing-demo
 
 # Start the mock server plus the browser web app
 pnpm run serve:marketing-demo:web
+
+# Open a disposable Electron profile with cinematic artwork and seeded rails
+# First build: pnpm nx run electron-backend:build-e2e
+pnpm demo:cinematic
+
+# Alternate dashboard with live channel logos and the current programme guide
+pnpm demo:cinematic:live
 ```
 
 ---
+
+## Fictional TMDB metadata
+
+The normal mock server also serves a TMDB-shaped API under `/tmdb/3` and local
+images under `/tmdb/t/p`. Movie and series details, people, filmographies and
+season episodes use the same fictional marketing catalog as the provider API.
+No real TMDB key or external network access is needed. These routes are absent
+in performance-control mode.
+
+The TV presentation test intercepts TMDB requests and fulfills them from these
+routes. See [synthetic TV screenshots](../../docs/development/tv-development.md#synthetic-screenshots)
+for the capture command and [mock architecture](../../docs/architecture/xtream-mock-server.md#fictional-tmdb-api)
+for endpoint details.
 
 ## Local Performance Mode
 
@@ -259,17 +279,21 @@ application code.
 ## Release Demo Artwork
 
 The `marketing:marketing` fixture uses 65 original fictional titles for release
-screenshots. Its core 30-title artwork pack includes matched posters and
-backdrops; 35 additional movie-poster showcase titles use approved local poster
-PNGs and the deterministic SVG fallback for missing backdrops. The newest 20
-showcase movies are ordered first so they appear immediately in screenshot
-catalog grids. Assets are served from:
+screenshots. The cinematic pack adds six landscape backdrops, two series posters
+and two episode stills to the existing artwork. Black Harbor has a full movie
+synopsis; Skyline Sentinels has individual plots for all eighteen episodes.
+The newest 20 showcase movies are ordered first in catalog grids. Missing
+artwork keeps the deterministic SVG fallback. Assets are served from:
 
 ```text
-apps/xtream-mock-server/public/marketing/{poster,backdrop}/
+apps/xtream-mock-server/public/marketing/{poster,backdrop,episode}/
 ```
 
-Generate or validate those assets with:
+For the seeded interactive demos, eight release screenshots, saved cinematic
+prompts and offline validation, follow the
+[cinematic demo guide](../../docs/development/cinematic-demo.md).
+
+The legacy artwork pack's Image API generator remains available:
 
 ```bash
 pnpm release:artwork:dry-run

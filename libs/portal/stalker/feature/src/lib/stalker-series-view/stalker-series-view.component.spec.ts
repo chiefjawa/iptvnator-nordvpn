@@ -22,6 +22,7 @@ describe('StalkerSeriesViewComponent', () => {
         openResolvedPlayback,
         openExternalPlayback,
         isEmbeddedPlayer,
+        seriesAutoplay,
         fetchLinkToPlay,
         currentPlaylist,
         createFixture,
@@ -137,6 +138,22 @@ describe('StalkerSeriesViewComponent', () => {
             undefined
         );
         expect(openResolvedPlayback).toHaveBeenCalledTimes(1);
+    });
+
+    it('scopes correction identities to the current Stalker catalog', async () => {
+        currentPlaylist.update((playlist) => ({ ...playlist, _id: 'source' }));
+        selectedItem.set({ id: '42', info: { name: 'Series' } });
+        for (const catalog of ['series', 'vod'] as const) {
+            selectedContentType.set(catalog);
+            await stabilize();
+            expect(fixture.componentInstance.tmdbMatch()?.identity).toEqual({
+                provider: 'stalker',
+                playlistId: 'source',
+                mediaType: 'tv',
+                itemId: '42',
+                catalog,
+            });
+        }
     });
 
     it('keeps provider episodes playable while hiding download presentation', async () => {
@@ -604,6 +621,21 @@ describe('StalkerSeriesViewComponent', () => {
         const firstEpisodeKey = inlinePlayer.playbackSessionKey();
         expect(firstEpisodeKey).not.toBe('');
 
+        seriesAutoplay.set(false);
+        fixture.detectChanges();
+        inlinePlayer.playbackEnded.emit();
+        await fixture.whenStable();
+        fixture.detectChanges();
+
+        expect(inlinePlayer.playbackSessionKey()).toBe(firstEpisodeKey);
+        expect(inlinePlayer.seriesNavigation()).toEqual({
+            canPrevious: false,
+            canNext: true,
+            autoplayEnabled: false,
+        });
+
+        seriesAutoplay.set(true);
+        fixture.detectChanges();
         inlinePlayer.playbackEnded.emit();
         await fixture.whenStable();
         fixture.detectChanges();

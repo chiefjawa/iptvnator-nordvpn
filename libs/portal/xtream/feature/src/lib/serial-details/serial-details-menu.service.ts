@@ -13,6 +13,9 @@ import {
     XtreamStore,
 } from '@iptvnator/portal/xtream/data-access';
 import { RuntimeCapabilitiesService, SettingsStore } from '@iptvnator/services';
+import { copyTextToClipboard } from '@iptvnator/services/clipboard-copy';
+import { captureHistoryOwner } from '@iptvnator/services/history-events';
+import { sourceConnection } from '@iptvnator/services/source-sync/connection';
 import {
     VideoPlayer,
     type ExternalPlayerName,
@@ -293,7 +296,7 @@ export class SerialDetailsMenuService {
             return;
         }
         try {
-            await navigator.clipboard.writeText(playback.streamUrl);
+            await copyTextToClipboard(playback.streamUrl);
             this.notify('PORTALS.STREAM_URL_COPIED');
         } catch (error) {
             this.logger.warn('Copying the stream URL failed', error);
@@ -321,19 +324,30 @@ export class SerialDetailsMenuService {
         if (!playlistId || !seriesId || !this.dataSource) {
             return;
         }
+        const current = captureHistoryOwner(
+            sourceConnection()?.instanceId,
+            playlistId,
+            () => sourceConnection()?.instanceId
+        );
         try {
             const content = await this.dataSource.getContentByXtreamId(
                 seriesId,
                 playlistId,
                 'series'
             );
-            if (!content?.id) {
+            const contentId =
+                content?.id ??
+                ((await this.dataSource.supportsPortableHistory?.(playlistId))
+                    ? seriesId
+                    : null);
+            if (!contentId || !current()) {
                 return;
             }
             await this.dataSource.removeRecentItem(
-                { id: content.id, type: 'series' },
+                { id: contentId, type: 'series', providerId: seriesId },
                 playlistId
             );
+            if (!current()) return;
             // The refreshed list drops the row, and brings it back once the
             // series is played again.
             this.xtreamStore.loadRecentItems({ id: playlistId });

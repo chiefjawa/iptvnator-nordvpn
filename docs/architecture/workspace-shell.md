@@ -17,6 +17,9 @@ renders checking, no-update, error, download and install states. Router
 navigation preserves the unsaved-settings guard; checks use the saved update
 channel. Repeating the command on About checks again; a download in progress or
 ready to install is preserved and shown instead of starting another check.
+Route navigation and native close requests share the settings confirmation
+through the save or discard, so competing exits produce one dialog and one
+decision.
 macOS places commands in the application menu; Windows/Linux place
 Settings in Edit and update checking in Help. Their frameless title bar has an
 Open menu button beside the window controls that opens the native menu as a
@@ -151,6 +154,12 @@ The shell is intentionally split into four persistent regions:
 4. Optional footer:
     1. External playback session bar when a docked session is visible.
 
+The app-wide source connection warning has its own row outside the shell.
+Electron places it below the workspace to clear the window controls, and the
+workspace fills the remaining height so both navigation footers stay visible.
+The browser places the warning above its route. In Settings, section groups
+scroll independently above the pinned About link.
+
 ### Content surface corner
 
 `main.workspace-content` (the scroller) sits in `.workspace-content-frame`.
@@ -234,6 +243,10 @@ services:
    and public search actions.
 3. `WorkspaceShellSearchSyncService` owns the search query signals, debounced
    application, provider-store synchronization, and query-param sync.
+   Query-only replacements preserve the current entry's validated
+   `collectionViewState` (content tab and playlist scope), so Back/Forward
+   retain the collection view. Router bookkeeping and one-shot detail
+   handoffs are not copied into the replacement.
 4. `WorkspaceShellHeaderService` owns playlist title/subtitle, account/info
    actions, and refresh action state. It has no clear action: clearing
    recently viewed or favorites belongs to the collection page.
@@ -343,6 +356,8 @@ The service then navigates to the page's parent with `replaceUrl`, so history
 Back cannot return to the page just left; with nothing in-app before it, the
 parent shows no history fallback. The resolver returns a URL or router commands, may be asynchronous, and
 returns null when the page knows no parent, which keeps `Location.back()`.
+Starting another navigation while the parent resolves discards that pending
+Back action, so a delayed lookup cannot replace the newer page.
 Portal pages build their parent with `workspacePortalCommands()`
 (`@iptvnator/portal/shared/util`) from the route's `:id`; without a section,
 the portal route's `redirectTo` picks the default section within the same
@@ -479,12 +494,20 @@ three nested levels, their affordances and persistence are specified in
 `iptvnator-ui-guidelines.md` ("Collapsible Live Sidebar").
 
 A category click in a LIVE section (Xtream `live`, Stalker `itv` and `radio`)
-changes only the selected category: the live layouts gate their player on the
-store's selected item, so the handler must not clear it — the channel the user
+changes only the selected category: the live layouts keep playback separate
+from the browsed category, so the handler must not clear it — the channel the user
 is watching keeps playing while the sidebar re-filters (Xtream: #936; Stalker:
 `onStalkerCategoryClicked` returns before `clearSelectedItem()`). VOD and
 series category clicks do drop the open detail (`setSelectedItem(null)` /
 `clearSelectedItem()`) because they navigate to a list route.
+
+Xtream `/live` and `/live/:categoryId` share one URL-matched route definition.
+Changing or clearing a category from a deep link (including Recently Added)
+keeps the live layout and embedded player mounted, rather than reopening the
+channel. The matcher retains `categoryId` for existing consumers; the parental
+guard checks category changes and allows the category-less root without a PIN.
+Shell category-route detection reads consumed URL segments and parameters,
+not a literal route configuration path.
 
 The channel header offers **Show playing channel** when browsing excludes the
 active channel. It returns to that category and focuses the row without
@@ -507,7 +530,15 @@ Search is shell-owned and route-aware:
 6. Input changes are debounced before route/store updates are applied.
 7. Global search uses the header input as its primary input and writes the
    search phrase to the `q` query parameter, so history/back-forward behavior
-   matches the rest of the workspace.
+   matches the rest of the workspace. Applying the query after the debounce
+   or with Enter searches the local Xtream and M3U catalogs. A query of at
+   least two characters also searches configured Stalker portals for the
+   selected Movies and Series filters. Local results appear without waiting
+   for Stalker, and all results use the same cards and **Group results by
+   playlist** setting. An inline status shows pending searches, and a failed
+   portal offers Retry. Stalker contributes the first page from each catalog
+   and links to the full portal search when more results may be available.
+   Opening a result keeps the global query in its Back target.
 8. The URL is authoritative for the search box only when it carries search
    intent. `WorkspaceShellSearchSyncService` re-reads `q` on every
    `NavigationEnd`, but an **app-initiated** navigation that stays on the same
@@ -530,6 +561,27 @@ Search is shell-owned and route-aware:
     cancels any pending debounce, so the Enter key committing a trimmed term
     cannot be overwritten a moment later by the untrimmed keystroke still
     waiting behind it.
+11. Xtream and Stalker category scopes can be cleared by clicking anywhere on
+    the header scope chip or by clicking the selected sidebar category again.
+    Both actions merge the current input into the destination URL, including
+    text still waiting for the search debounce, and return to all items in the
+    current section. Scope-only navigation uses transient router `info` to keep
+    raw whitespace, newer keystrokes and the pending debounce. URL writes wait
+    for that navigation to settle so a debounce cannot supersede it. Debounce
+    completion also reconciles `q` when the input returns to the already applied
+    term; `q` stays trimmed and history remains authoritative. During live playback the
+    all-channel sidebar stays available after clearing an empty search, without
+    remounting the player.
+    Clearing an empty input removes `q` while preserving other
+    query parameters. The clear control and action are limited to Xtream
+    `live`/`vod`/`series` and Stalker `itv`/`radio`/`vod`/`series`; retained
+    category state must not make collection or advanced-search scopes
+    dismissible. Both entry points share the provider-state reset and
+    navigation action. Live playback remains selected; VOD and series details
+    close when returning to the list. The category name and close icon form
+    one button with a neutral hover and keyboard-focus highlight that remains
+    visible in both themes; hovering the search field does not highlight it.
+    The all-items scope stays non-interactive.
 
 Rail navigation is also shell-owned:
 
@@ -787,9 +839,11 @@ Startup window mode (`Settings.startupWindowMode`, issue #1455):
    the request with `setFullScreen(true)` right after `show()` wherever
    `isFullScreen()` is still false — never unconditionally, or the
    platforms that honoured the option would animate a second toggle. The
-   saved bounds stay spread into the options — they are the normal bounds
-   the window returns to, and the close handler keeps persisting
-   `getNormalBounds()`. `maximized` calls `maximize()` right before the
+   saved normal bounds are restored when the top edge is inside a connected
+   display's work area and the bounds overlap that area by at least 100 px in
+   each dimension. Otherwise the window starts centered on the primary display.
+   The close handler persists `getNormalBounds()`. `maximized` calls
+   `maximize()` right before the
    first `show()`, never earlier: `maximize()` on a hidden window shows it,
    and a blank window would flash. That first show happens at
    `ready-to-show` or the main frame's `did-finish-load`, whichever comes
@@ -964,6 +1018,19 @@ Reloading the renderer on an in-app route:
    leave that directory (an absolute URL, another scheme, a `..` escape)
    is dropped with only the parameter removed, so the app boots at its
    default route instead of following an arbitrary target.
+   The lazy collection's `setupCollectionViewStateSync` saves tab/scope on
+   `pagehide` in a single session-storage handoff containing the exact current
+   URL and validated `collectionViewState` fields. Its listener is removed
+   when the collection unmounts. Only an actual restore request loads
+   `prepareRendererReload` (`apps/web/src/renderer-reload.ts`), awaited before
+   Angular bootstraps; ordinary startup never loads collection recovery or
+   its portal dependencies. Bootstrap consumes the handoff once, only
+   for a matching recovered `file://` URL, and validates the fields again.
+   It never restores Router bookkeeping, inline detail or playback/handoff
+   commands. Unavailable storage still permits URL recovery; a missing source
+   follows the collection's existing all-playlists/empty-state fallback.
+   Browser/PWA routing is unchanged. This is reload recovery, not startup
+   preference or general collection persistence.
 4. Zoom persistence is unaffected: the failed reload's
    `did-start-navigation` already saved the level and released ownership,
    the recovery load's `did-start-navigation` is then a no-op, and the new
@@ -978,7 +1045,10 @@ Reloading the renderer on an in-app route:
    since the URL alone is identical before and after);
    `window-zoom-level.e2e.ts` reloads the same way. Unit coverage:
    `renderer-reload-fallback.spec.ts`, `renderer-reload-route.util.spec.ts`,
-   `app.spec.ts` ("renderer reload recovery").
+   `app.spec.ts` ("renderer reload recovery"), `renderer-reload.spec.ts`.
+   `navigation-context.e2e.ts` additionally checks Favorites/Recent tab and
+   scope through both reload paths, a new document, subsequent Back/Forward,
+   an offline source and a removed source.
 
 Layout integration:
 
@@ -1044,6 +1114,28 @@ Known caveats:
 2. Double-click-to-maximize on drag regions is handled natively by
    Electron/Chromium; on Linux the exact behavior depends on the window
    manager.
+
+## Update restart and unsaved settings
+
+Both the About action and the global update notification install through
+`AppUpdateInstallService`. Registered settings guards first run the existing
+Save/Discard/Cancel decision; cancellation or a failed save sends no install
+IPC and keeps protection armed. Concurrent install intents share one decision.
+Cancelling an install never sends an unscoped cancellation for an unseen native close.
+The same unload-guard decision also owns competing native close/reload requests.
+After approval only DOM unload protection is suspended; the main-process guard
+stays armed until install IPC atomically clears pending closes and prepares the
+updater's close bypass. Failed installation restores DOM protection and revisits
+close requests received while waiting. The global notification retains download
+errors with an announced
+message and a Check again action instead of disappearing. A retry keeps the
+known release while checking and on failure; a new verdict replaces it, and
+changing channels still clears the previous channel's release. A no-update
+verdict is not retained as an available update during another check.
+
+Regression coverage: `app-update-recovery.e2e.ts` uses the real Electron
+renderer/preload/IPC with a disposable updater fixture (no package installation),
+checks both install entry points and verifies saved settings after restart.
 
 ## Maintenance Guidance
 

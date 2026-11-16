@@ -1,5 +1,40 @@
+import {
+    isBackKey,
+    mediaKeyAction,
+    type TvMediaAction,
+} from '@iptvnator/tv/util';
+import { registerTvKeys } from './platform';
+
 const selectors =
-    'button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),summary,[data-tv-scroll]';
+    'button:not(:disabled):not([data-tv-pointer-only]),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),summary,[data-tv-scroll]';
+
+const textFieldSelector =
+    'textarea,input:not([type="checkbox"]):not([type="radio"])';
+
+/** The element is a text field accepting input right now (not read-only). */
+export function editingText(target: Element | null): boolean {
+    return (
+        !!target?.matches?.(textFieldSelector) &&
+        !(target as HTMLInputElement).readOnly
+    );
+}
+
+/** The element is a textarea accepting input right now (not read-only). */
+export function editingTextarea(target: Element | null): boolean {
+    return (
+        !!target?.matches?.('textarea') &&
+        !(target as HTMLTextAreaElement).readOnly
+    );
+}
+
+/** Backspace deletes text only while the target field is editable. */
+export function backspaceEdits(event: {
+    key: string;
+    target: EventTarget | null;
+}): boolean {
+    return event.key === 'Backspace' && editingText(event.target as Element);
+}
+
 export function focusKey() {
     return (document.activeElement as HTMLElement)?.dataset.focus ?? '';
 }
@@ -24,14 +59,18 @@ export function restoreFocus(
         if (scroll !== undefined) {
             const main = document.querySelector('main');
             if (main) main.scrollTop = scroll;
+            // Virtual spacers are measured after this frame; retain their saved offset.
+            if (!target?.hasAttribute('data-virtual-index'))
+                target?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
         }
     });
 }
 export function installRemote(
     back: () => void,
     fullscreen: () => boolean,
-    playerKey: (key: number) => void
+    playerKey: (action: TvMediaAction) => void
 ) {
+    registerTvKeys();
     let lastMove = 0;
     const handler = (event: KeyboardEvent) => {
         const code = event.keyCode;
@@ -44,39 +83,43 @@ export function installRemote(
                     40: 'ArrowDown',
                 } as Record<number, string>
             )[code] ?? event.key;
-        if (
-            code === 461 ||
-            event.key === 'Escape' ||
-            event.key === 'BrowserBack' ||
-            (event.key === 'Backspace' &&
-                !(event.target instanceof HTMLInputElement))
-        ) {
+        if (isBackKey(event) && !backspaceEdits(event)) {
             event.preventDefault();
             back();
             return;
         }
-        if ([415, 19, 413, 412, 417].includes(code)) {
+        const action = mediaKeyAction(code);
+        if (action) {
             event.preventDefault();
-            playerKey(code);
+            playerKey(action);
             return;
         }
         if (!direction.startsWith('Arrow')) return;
         const from = document.activeElement as HTMLElement;
         const horizontal = /Left|Right/.test(direction);
-        // Keep caret/slider movement native; vertical arrows leave single-line
-        // fields. Selects own vertical choice changes and leave horizontally.
+        // Keep caret/slider movement native while a field is editable;
+        // read-only fields and vertical arrows leave single-line fields.
+        // Selects own vertical choice changes and leave horizontally.
         if (
-            from?.matches('textarea') ||
-            (horizontal &&
-                from?.matches(
-                    'input:not([type="checkbox"]):not([type="radio"])'
-                )) ||
+            editingTextarea(from) ||
+            (horizontal && editingText(from)) ||
             (!horizontal && from?.matches('select'))
         )
             return;
         event.preventDefault();
         if (event.repeat && Date.now() - lastMove < 75) return;
         lastMove = Date.now();
+        const row = horizontal && from?.closest('[data-tv-horizontal]');
+        if (row) {
+            const items = Array.from(
+                row.querySelectorAll<HTMLElement>(selectors)
+            );
+            const index = items.indexOf(from);
+            const target = items[index + (direction === 'ArrowRight' ? 1 : -1)];
+            target?.focus();
+            target?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+            return;
+        }
         const root =
             document.querySelector('[data-tv-modal]') ??
             (fullscreen()
@@ -117,12 +160,4 @@ export function installRemote(
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-}
-export function platformBack() {
-    const platform = window as unknown as {
-        webOS?: { platformBack?: () => void };
-        PalmSystem?: { platformBack?: () => void };
-    };
-    if (platform.webOS?.platformBack) platform.webOS.platformBack();
-    else platform.PalmSystem?.platformBack?.();
 }

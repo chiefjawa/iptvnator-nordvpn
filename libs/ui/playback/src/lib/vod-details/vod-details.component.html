@@ -190,6 +190,7 @@
         }
 
         <app-vod-more-menu
+            [tmdbMatch]="tmdbMatch()"
             [sections]="hero.menuSections()"
             [label]="'PORTALS.DETAIL.MORE_ACTIONS' | translate"
             testId="vod-more-menu"
@@ -212,15 +213,15 @@
     }
 
     <div detail-extras>
-        <app-similar-rail
-            [title]="'XTREAM.SIMILAR' | translate"
-            [items]="hero.similarRailItems()"
-            (selected)="openSimilarRailItem($event)"
-        />
         <app-cast-crew-row
             [cast]="hero.castMembers()"
             [directors]="hero.directorMembers()"
             (personSelected)="openActor($event)"
+        />
+        <app-similar-rail
+            [title]="'XTREAM.SIMILAR' | translate"
+            [items]="similarRailItems()"
+            (selected)="openSimilarRailItem($event)"
         />
     </div>
 </app-portal-detail-shell>

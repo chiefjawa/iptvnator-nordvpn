@@ -13,6 +13,8 @@ them. The skills stay short on purpose; the detail lives here.
 **During ordinary PRs** every user-visible change adds one
 `.changes/<area>-<slug>.md` note, written while the context is fresh. CI's
 "Release note gate" enforces it. Format and field table: `.changes/README.md`.
+The gate evaluates changes between the tested PR merge and its first parent.
+It reads the `no-release-note` label live so it can be applied before a rerun.
 
 **At release time** `tools/release/build-release-notes.mjs` fans those notes
 out into every surface, then deletes them. Nothing derives the version — it is
@@ -159,6 +161,25 @@ palette in `apps/website/tailwind.config.mjs`.
 Screenshots come only from the capture script running against the mock servers.
 Never publish one taken from a real playlist or account — streams, logos and
 metadata are copyrighted, and credentials must never reach a published image.
+For the desktop-hosting shot, also build `web-backend:build` and
+`web:build-hosted` so Electron can show the server controls. The shot leaves
+the server stopped and shows no access code. The parental-lock shot leaves
+both PIN fields empty.
+
+For the release 0.25 dashboard and detail showcase, run
+`pnpm release:screenshots --cinematic --release v0-25` after the standard
+capture. This overlays four screenshot pairs using committed original artwork
+and a synthetic offline metadata cache. The default capture keeps enrichment
+disabled; the explicit preset accepts only its invalid fixture key and retains
+the external-request and personal-database guards. Saved prompts, the interactive
+`pnpm demo:cinematic` / `pnpm demo:cinematic:live` launchers and validation commands are in the
+[cinematic demo guide](../development/cinematic-demo.md).
+
+`pnpm release:preview:themes` additionally composes the saved dark/light
+dashboard captures into a diagonal theme comparison for README or release
+previews. It writes lossless PNG/WebP files and source hashes to the release's
+`previews/` directory, preserving the captured screenshots and README. This is
+a local image-composition command; it starts no app, remote image API or CI job.
 
 The same script also produces the evergreen screenshots of the website guides.
 Manifest shots that carry `"group": "guides"` are skipped by a release run and
@@ -197,6 +218,13 @@ reporting that as "internal-only" would hide the one ordering mistake the
 pipeline is built to prevent.
 
 ## Draft verification
+
+For a large release, add a compact GitHub summary with a link to the full
+changelog at the top of the generated version section, followed by a blank
+line, `<!-- end-github-summary -->`, and another blank line. Public extraction
+uses that summary, leaving room for GitHub's generated PR and contributor
+list. The complete authored notes stay in the committed changelog. Without
+the marker, the tag build uses the full public section as usual.
 
 The `v*` tag build creates a **draft** GitHub release.
 `pnpm run release:verify:draft` (`tools/release/verify-draft-release.mjs`) is
@@ -254,6 +282,30 @@ An asset no rule claims is reported as a `NOTE:` and does **not** fail the run:
 a new build target should surface for a human to notice, not block a release
 until the rules catch up.
 
+## macOS signature and ticket validation
+
+Nightly and tag builds require strict code-signature verification, Gatekeeper
+assessment and a valid stapled ticket. If `stapler validate` reports
+`NSURLErrorDomain Code=-1005`, the build retries ticket validation once after
+five seconds. A failed retry or any other validation error blocks packaging.
+
+## Linux CI package installation
+
+The Linux packaging dependency step replaces the runner's Ubuntu `mirror+file`
+source with the official HTTPS archive, preserving suites, components and signing
+keys. This avoids returning to a stalled Azure mirror during index downloads.
+APT requests use a 30-second timeout and one retry. The update must succeed for
+every source (`--error-on=any`) before installation starts; update and install
+have independent five- and ten-minute process limits with a ten-second kill
+grace period. Packaging and test gates remain unchanged.
+
+Electron Builder uses the GitHub release asset API for its upstream packaging
+tool downloads in CI and keeps its normal archive checksums and cache. The
+public download is a fallback when the API is unavailable.
+The matrix fetches official Electron distributions through the asset
+API and verifies them using the checksums bundled with the installed Electron
+package. Electron Builder uses the same checksums when it reads the cache.
+
 ## AppImage external-manager metadata
 
 `electron-builder.json` scopes `X-AppImage-Name`, `X-AppImage-Homepage` and
@@ -287,11 +339,27 @@ References: [AppImage desktop keys](https://docs.appimage.org/reference/desktop-
 
 ## Rolling test drafts
 
+On PRs, the packaging workflow compares the checked-out merge tree with its
+first parent. If there are no changes outside `apps/website/`, it skips
+Electron packaging and checks the website instead. Moves across that boundary
+and changes to shared files run the full matrix. A missing comparison also
+runs the matrix. Nightly pushes, tags and manual runs keep their packaging
+scope. The PR scope job takes the place of nightly version resolution on PRs
+and cancels older scope checks for the same PR.
+
+The website-only job builds the site with offline release data and checks the
+four nonempty PNG files at their published paths. Every Linux packaging
+profile performs the same screenshot check and validates the AppStream XML
+and packaged metadata.
+
 Every non-fork PR build publishes its artifacts to a rolling **draft** release
 tagged `test-pr-<n>`; a non-PR, non-tag build (a dispatch on a branch) uses
 `test-<branch>`, the shape master pushes used before the nightly channel took
 over. The tag is stable per PR, so the draft is updated in place and a PR has
-at most one.
+at most one. If a new diff only changes the website, already running packages
+can finish. The release job checks that the PR is open at the built head
+before pruning or uploading, so an older draft can remain until the PR
+closes. Its title and body identify the packaged commit.
 
 `cleanup-pr-draft.yml` deletes a PR's draft when the PR closes. That event is
 the fast path, not a guarantee: GitHub does not run a `pull_request: closed`
@@ -305,10 +373,10 @@ lookup failure, a `test-<branch>` draft — is left alone.
 
 ## Nightly channel
 
-Every push to `master` of `4gray/iptvnator` is also a nightly. The same
-`build-and-make.yaml` run that builds the matrix publishes its artifacts as a
-**prerelease of `4gray/iptvnator-nightly`** instead of the rolling
-`test-master` draft: a draft is invisible to anyone without write access and
+Pushes to `master` of `4gray/iptvnator` that pass the workflow's path filters
+start a nightly run. The workflow `build-and-make.yaml` builds the matrix and
+publishes its artifacts as a **prerelease of `4gray/iptvnator-nightly`** instead
+of the rolling `test-master` draft: a draft is invisible to anyone without write access and
 to electron-updater, while a published prerelease is what the desktop app's
 **Nightly** update channel installs. PR builds keep their `test-pr-<n>`
 drafts; tag builds are unaffected.
@@ -367,9 +435,14 @@ frontend and backend builds and before electron-builder reads it
    release is never deleted by a re-run: re-running after a successful
    publish is a no-op, and only a draft left behind by a failed run is
    replaced.
-4. The release job is serialized per ref, but two master runs can finish out
-   of order. electron-updater takes the newest feed entry, so a nightly older
-   than the newest published one is dropped rather than published.
+4. Build and release job concurrency groups are shared across pushes to the
+   same ref.
+   [GitHub can replace a pending job](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency#example-using-concurrency-and-the-default-behavior)
+   when another job enters the same group, even with
+   `cancel-in-progress: false`. A superseded run can miss publication. The
+   next successfully published descendant includes its changes.
+   The release job is serialized per ref, but two master runs can finish out
+   of order. The publish step drops a nightly older than the newest feed entry.
 5. Only the newest `NIGHTLY_KEEP_RELEASES` (20) nightlies are kept; older
    ones are deleted together with their tags.
 
@@ -416,7 +489,10 @@ button that submits the settings form
 (`SettingsAboutSectionComponent.saveAndCheckForAppUpdate` →
 `SettingsComponent.onSubmit()`). No renderer-side check follows: the saved
 channel reaches `persistAppUpdateChannel`, whose change listener calls
-`AppUpdateService.setChannel`, which already re-checks an idle updater. A
+`AppUpdateService.setChannel`, which checks the saved channel. If a check is
+already running, it finishes before the service checks the latest saved
+channel. The service skips superseded availability results. The main process
+also accepts one install request at a time and releases that guard on failure. A
 download in flight or finished belongs to the previous channel and is kept
 by `setChannel`, so in those states the plain check stays and only the hint
 is shown. Because that kept download outlives the channel it was found on,

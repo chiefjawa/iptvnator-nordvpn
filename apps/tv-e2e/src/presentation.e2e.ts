@@ -3,7 +3,83 @@ import { workspaceRoot } from '@nx/devkit';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { mkdir } from 'node:fs/promises';
-import { addSource, nav, start } from './helpers';
+import {
+    chooseTv,
+    addSource,
+    backend,
+    fillTvField,
+    nav,
+    start,
+} from './helpers';
+import { enableMarketingTmdb } from './marketing-tmdb';
+
+test('a physical key starts editing a focused TV field without OK', async ({
+    page,
+}) => {
+    await start(page);
+    await expect(
+        page
+            .getByRole('navigation')
+            .getByRole('button', { name: 'Sources', exact: true })
+    ).toBeFocused();
+    const name = page.getByRole('textbox', { name: 'Name', exact: true });
+    await name.focus();
+    await expect(name).toHaveJSProperty('readOnly', true);
+    await name.press('a');
+    await expect(name).toHaveValue('a');
+    await page.keyboard.press('Backspace');
+    await expect(name).toHaveValue('');
+    await expect(name).toBeFocused();
+});
+
+test('clicking into existing text preserves the pointer caret', async ({
+    page,
+}) => {
+    await start(page);
+    const name = page.getByRole('textbox', { name: 'Name', exact: true });
+    const value = 'abcdefgh';
+    await name.click();
+    await name.fill(value);
+    await page.getByLabel('Provider URL').focus();
+    await expect(name).toHaveJSProperty('readOnly', true);
+    await name.click({ position: { x: 36, y: 16 } });
+    const selection = await name.evaluate((element) => {
+        const input = element as HTMLInputElement;
+        return {
+            start: input.selectionStart ?? -1,
+            end: input.selectionEnd ?? -1,
+        };
+    });
+    expect(selection.start).toBeGreaterThan(0);
+    expect(selection.start).toBeLessThan(value.length);
+    expect(selection.end).toBe(selection.start);
+    await page.keyboard.press('z');
+    await expect(name).toHaveValue(
+        value.slice(0, selection.start) + 'z' + value.slice(selection.start)
+    );
+});
+
+test('an invalid source submission keeps native validation visible', async ({
+    page,
+}) => {
+    await start(page);
+    const name = page.getByRole('textbox', { name: 'Name', exact: true });
+    const url = page.getByLabel('Provider URL');
+    await fillTvField(page.getByLabel('IPTVnator backend URL'), backend);
+    await name.focus();
+    await expect(name).toHaveJSProperty('readOnly', true);
+
+    await page.getByRole('button', { name: 'Save and connect' }).click();
+    await expect(name).toBeFocused();
+    await expect(name).toHaveJSProperty('willValidate', true);
+    await expect(name).not.toHaveJSProperty('validationMessage', '');
+
+    await page.keyboard.press('ArrowDown');
+    await expect(url).toBeFocused();
+    await expect(url).toHaveJSProperty('readOnly', true);
+    await expect(name).toHaveJSProperty('readOnly', true);
+});
+
 test('packaged classic script boots and connects from file protocol', async ({
     page,
 }) => {
@@ -36,9 +112,13 @@ test('remote arrows can leave source fields and reach native disclosure controls
     await expect(
         page.getByText('Backend access token (if required)', { exact: true })
     ).toBeFocused();
-    await page.getByLabel('Name', { exact: true }).focus();
+    const name = page.getByLabel('Name', { exact: true });
+    await name.focus();
     await page.keyboard.press('ArrowLeft');
-    await expect(page.getByLabel('Name', { exact: true })).toBeFocused();
+    await expect(name).not.toBeFocused();
+    await name.press('Enter');
+    await page.keyboard.press('ArrowLeft');
+    await expect(name).toBeFocused();
     await page.keyboard.press('ArrowDown');
     await expect(page.getByLabel('Provider URL')).toBeFocused();
     await page.getByRole('button', { name: 'STALKER', exact: true }).click();
@@ -63,17 +143,12 @@ test('remote arrows can leave source fields and reach native disclosure controls
     await page.getByRole('tab', { name: 'Appearance', exact: false }).click();
     const layout = page.getByLabel('Home composition');
     await layout.focus();
-    expect(
-        await layout.evaluate((element) => {
-            const event = new KeyboardEvent('keydown', {
-                key: 'ArrowDown',
-                bubbles: true,
-                cancelable: true,
-            });
-            element.dispatchEvent(event);
-            return event.defaultPrevented;
-        })
-    ).toBe(false);
+    await page.keyboard.press('Enter');
+    await expect(
+        page.getByRole('dialog', { name: 'Home composition', exact: true })
+    ).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(layout).toBeFocused();
     await page.keyboard.press('ArrowLeft');
     await expect(layout).not.toBeFocused();
 });
@@ -87,6 +162,8 @@ test('cinema/showcase, direct catalog diagnostic and TV layout widths', async ({
         username: 'marketing',
         password: 'marketing',
     });
+    await enableMarketingTmdb(page);
+    await nav(page, 'Home');
     await expect(page.locator('.hero h1')).not.toHaveText(
         'Make yourself at home.'
     );
@@ -138,16 +215,88 @@ test('cinema/showcase, direct catalog diagnostic and TV layout widths', async ({
         'src',
         /backdrop/
     );
+    const chips = page.getByRole('list', { name: 'Title information' });
+    await expect(
+        chips.getByLabel('Genre: Maritime Crime Thriller', { exact: true })
+    ).toBeVisible();
+    await expect(
+        chips.getByLabel('Country: Meridian Union', { exact: true })
+    ).toBeVisible();
+    await expect(
+        chips.getByLabel('TMDB rating: TMDB 8.2', { exact: true })
+    ).toBeVisible();
+    const credits = page.getByRole('region', { name: 'TMDB credits' });
+    await expect(credits.getByRole('heading')).toHaveText('Directors & cast');
+    await expect(credits.getByRole('button')).toHaveCount(5);
+    await expect
+        .poll(() =>
+            page
+                .locator(
+                    '.detail-poster img, .page-backdrop img, .person-avatar img'
+                )
+                .evaluateAll((images) =>
+                    images.every(
+                        (element) =>
+                            (element as HTMLImageElement).complete &&
+                            (element as HTMLImageElement).naturalWidth > 0
+                    )
+                )
+        )
+        .toBe(true);
     await page.screenshot({
         path: join(workspaceRoot, 'dist/tv-verification/cinema-detail.png'),
     });
+    await credits
+        .getByRole('button', {
+            name: 'View filmography: Mara Venn',
+            exact: true,
+        })
+        .click();
+    await expect(
+        page.getByRole('region', { name: 'Person filmography' })
+    ).toBeVisible();
+    await expect(page.locator('.filmography-card').first()).toContainText(
+        'Black Harbor'
+    );
+    await nav(page, 'Series');
+    await page.locator('.poster-card').first().click();
+    await expect(page.locator('.detail-hero h1')).toHaveText(
+        'Skyline Sentinels'
+    );
+    await expect(
+        chips.getByLabel('Duration: 44 min / episode', { exact: true })
+    ).toBeVisible();
+    await expect(credits.getByRole('heading')).toHaveText('Creators & cast');
+    await expect(credits.getByRole('button')).toHaveCount(5);
+    await expect(page.locator('.episode strong').first()).toHaveText(
+        'The Dawn Shift'
+    );
+    await expect
+        .poll(() =>
+            page
+                .locator(
+                    '.detail-poster img, .page-backdrop img, .person-avatar img, .episode-still'
+                )
+                .evaluateAll((images) =>
+                    images.every(
+                        (element) =>
+                            (element as HTMLImageElement).complete &&
+                            (element as HTMLImageElement).naturalWidth > 0
+                    )
+                )
+        )
+        .toBe(true);
+    await page.screenshot({
+        path: join(workspaceRoot, 'dist/tv-verification/cinema-series.png'),
+    });
     await nav(page, 'Settings');
+    await page.getByRole('tab', { name: 'Connection', exact: false }).click();
     await page.getByRole('button', { name: 'Test direct access' }).click();
     await expect(page.locator('.probe [role=status]')).toContainText(
         'directly readable'
     );
     await page.getByRole('tab', { name: 'Appearance', exact: false }).click();
-    await page.getByLabel('Home composition').selectOption('shelf');
+    await chooseTv(page, 'Home composition', 'shelf');
     await page.getByRole('button', { name: 'Save settings' }).click();
     await nav(page, 'Home');
     await expect(page.locator('.hero.compact')).toBeVisible();

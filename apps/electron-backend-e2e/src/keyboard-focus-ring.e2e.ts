@@ -1,12 +1,12 @@
 import type { APIRequestContext, Locator, Page } from '@playwright/test';
 import {
+    addStalkerPortal,
     addXtreamPortal,
     channelItemByTitle,
+    clickCategoryById,
     clickCategoryByNameExact,
     clickFirstGridListCard,
     closeElectronApp,
-    defaultXtreamPassword,
-    defaultXtreamUsername,
     expect,
     launchElectronApp,
     openSettings,
@@ -16,10 +16,22 @@ import {
     resetMockServers,
     saveSettings,
     test,
+    waitForStalkerCatalog,
     waitForXtreamWorkspaceReady,
 } from './electron-test-fixtures';
-import { fetchXtreamLiveFixture, getXtreamTitle } from './portal-mock-fixtures';
+import {
+    routePlayableStreams,
+    startAndConfirmPlayback,
+} from './playable-stream-fixture';
+import {
+    fetchStalkerCategoryFixture,
+    fetchXtreamLiveFixture,
+    getXtreamTitle,
+} from './portal-mock-fixtures';
 import { applyTheme } from './theme-contrast';
+
+// Fictional metadata and local artwork keep the attached focus report synthetic.
+const SYNTHETIC_ACCOUNT = { username: 'marketing', password: 'marketing' };
 
 // ---------------------------------------------------------------------------
 // Keyboard focus is visible everywhere. The global stylesheet used to strip
@@ -444,14 +456,10 @@ async function openMoviesWithRatingFilter(page: Page): Promise<void> {
 
 /** Switches the guide to its list view and opens a live channel's EPG. */
 async function openLiveEpgList(page: Page, request: APIRequestContext) {
-    const fixture = await fetchXtreamLiveFixture(request, {
-        username: defaultXtreamUsername,
-        password: defaultXtreamPassword,
-    });
+    const fixture = await fetchXtreamLiveFixture(request, SYNTHETIC_ACCOUNT);
     const channel = fixture.items[0];
     if (!channel) throw new Error('Expected a live channel in the mock.');
-    // The mock's live streams redirect to an external demo stream; the
-    // guide needs none of it, so keep that request pending.
+    // Block fallback demo media; the synthetic account serves its clip locally.
     await page.route('https://test-streams.mux.dev/**', () => undefined);
     await openSettings(page);
     await openSettingsSection(page, 'epg');
@@ -481,6 +489,73 @@ async function openCommandPalette(page: Page): Promise<Locator> {
 }
 
 test.describe('Keyboard focus ring', () => {
+    test('@electron @stalker seeking keeps the detail shell ring off after a click', async ({
+        dataDir,
+        request,
+    }) => {
+        await resetMockServers(request, ['stalker']);
+        const series = await fetchStalkerCategoryFixture(request, 'series');
+        const app = await launchElectronApp(dataDir);
+        const page = app.mainWindow;
+        try {
+            await routePlayableStreams(page);
+            await openSettings(page);
+            await openSettingsSection(page, 'playback');
+            await page.getByTestId('select-video-player').click();
+            await page
+                .getByRole('option', {
+                    name: 'HTML5 video player',
+                    exact: true,
+                })
+                .click();
+            await saveSettings(page);
+            await page.keyboard.press('Escape');
+            await addStalkerPortal(page);
+            await waitForStalkerCatalog(page);
+            await openWorkspaceSection(page, 'Series');
+            await clickCategoryById(page, series.categoryId);
+            await clickFirstGridListCard(page);
+
+            const shell = page.locator('app-portal-detail-shell');
+            const episode = shell
+                .locator('.episode-card, .episode-list-item')
+                .first();
+            await startAndConfirmPlayback(page, () => episode.click(), 0.25);
+            const video = shell.locator('app-html-video-player video');
+            await expect(video).toBeVisible();
+            await video.evaluate((element: HTMLVideoElement) =>
+                element.pause()
+            );
+            const time = () =>
+                video.evaluate(
+                    (element: HTMLVideoElement) => element.currentTime
+                );
+            const clickShell = () => shell.click({ position: { x: 8, y: 28 } });
+
+            await clickShell();
+            await expect(shell).toBeFocused();
+            const beforeSeek = await time();
+            await page.keyboard.press('ArrowRight');
+            await expect.poll(time).toBeGreaterThan(beforeSeek + 4);
+            await expect(shell).toHaveCSS('outline-style', 'none');
+
+            await page.keyboard.press('Tab');
+            await expect(shell).not.toBeFocused();
+            await page.keyboard.press('Shift+Tab');
+            await expect(shell).toBeFocused();
+            await expect(shell).toHaveCSS('outline-style', 'solid');
+
+            await clickShell();
+            await expect(shell).toBeFocused();
+            await expect(shell).toHaveCSS('outline-style', 'none');
+            await page.keyboard.press('ArrowLeft');
+            await expect.poll(time).toBeLessThan(beforeSeek + 1);
+            await expect(shell).toHaveCSS('outline-style', 'none');
+        } finally {
+            await closeElectronApp(app);
+        }
+    });
+
     test('@electron @theme every Tab stop shows one visible ring in both themes, a click none', async ({
         dataDir,
         request,
@@ -490,7 +565,7 @@ test.describe('Keyboard focus ring', () => {
         const page = app.mainWindow;
         const report: Record<string, Stop[]> = {};
         try {
-            await addXtreamPortal(page);
+            await addXtreamPortal(page, SYNTHETIC_ACCOUNT);
             await waitForXtreamWorkspaceReady(page);
 
             const walk = async (
@@ -516,11 +591,17 @@ test.describe('Keyboard focus ring', () => {
                 shell.locator('app-detail-action-button button').first(),
                 14
             );
-            expect(
-                report['detail actions and season tabs (dark)'].map(
-                    (stop) => stop.element
-                )
-            ).toContain('button.season-tabs__pill');
+            for (const theme of ['light', 'dark']) {
+                expect(
+                    report[`detail actions and season tabs (${theme})`]
+                        .map((stop) => stop.element)
+                        .filter((element) =>
+                            element.startsWith('button.season-tabs__pill')
+                        )
+                ).toEqual([
+                    'button.season-tabs__pill.season-tabs__pill--active',
+                ]);
+            }
 
             const pill = shell.locator('.season-tabs__pill').first();
             await expectNoRingAfterClick(page, pill, 'season tab');

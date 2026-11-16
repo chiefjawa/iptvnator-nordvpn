@@ -22,6 +22,9 @@ export interface ControlsShortcutHandlers {
     toggleMute: () => void;
 }
 
+export const PLAYER_SHORTCUTS_SUSPENDED_SELECTOR =
+    '[inert], [data-player-shortcuts-suspended]';
+
 const INTERACTIVE_SELECTOR = [
     'a[href]',
     'button',
@@ -33,6 +36,8 @@ const INTERACTIVE_SELECTOR = [
     '[role="button"]',
     '[role="checkbox"]',
     '[role="combobox"]',
+    '[role="dialog"]',
+    '[role="alertdialog"]',
     '[role="link"]',
     '[role="listbox"]',
     '[role^="menuitem"]',
@@ -42,6 +47,25 @@ const INTERACTIVE_SELECTOR = [
     '[role="switch"]',
     '[role="textbox"]',
 ].join(',');
+
+export function targetsInteractivePlayerControl(event: KeyboardEvent): boolean {
+    const path =
+        typeof event.composedPath === 'function' ? event.composedPath() : [];
+    const nodes = path.length > 0 ? path : [event.target];
+    return nodes.some((node) => {
+        const element = node as HTMLElement | null;
+        if (!element || typeof element.tagName !== 'string') {
+            return false;
+        }
+        if (
+            typeof element.matches === 'function' &&
+            element.matches(INTERACTIVE_SELECTOR)
+        ) {
+            return true;
+        }
+        return element.isContentEditable === true;
+    });
+}
 
 export class ControlsShortcuts {
     private static readonly instances = new Set<ControlsShortcuts>();
@@ -98,7 +122,7 @@ export class ControlsShortcuts {
         if (
             handlers
                 .hostElement?.()
-                ?.closest('[inert], [data-player-shortcuts-suspended]')
+                ?.closest(PLAYER_SHORTCUTS_SUSPENDED_SELECTOR)
         ) {
             return;
         }
@@ -174,33 +198,16 @@ export class ControlsShortcuts {
 
     /**
      * Ignore modified playback keys so app/native shortcuts retain ownership,
-     * and ignore events originating from an interactive control anywhere in
-     * the composed path. Escape is handled before this check so it can still
-     * close controls popovers while a modifier key is held.
+     * and ignore events originating from a dialog or interactive control
+     * anywhere in the composed path. Escape is handled before this check so
+     * it can still close controls popovers while a modifier key is held.
      */
     private shouldIgnore(event: KeyboardEvent): boolean {
         if (event.metaKey || event.ctrlKey || event.altKey) {
             return true;
         }
 
-        const path =
-            typeof event.composedPath === 'function'
-                ? event.composedPath()
-                : [];
-        const nodes = path.length > 0 ? path : [event.target];
-        return nodes.some((node) => {
-            const element = node as HTMLElement | null;
-            if (!element || typeof element.tagName !== 'string') {
-                return false;
-            }
-            if (
-                typeof element.matches === 'function' &&
-                element.matches(INTERACTIVE_SELECTOR)
-            ) {
-                return true;
-            }
-            return element.isContentEditable === true;
-        });
+        return targetsInteractivePlayerControl(event);
     }
 
     private static resolvePlaybackOwner(): ControlsShortcuts | null {

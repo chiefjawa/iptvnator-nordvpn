@@ -60,6 +60,7 @@ import {
     PORTAL_EXTERNAL_PLAYBACK,
     PORTAL_PLAYER,
     createLogger,
+    createInlinePlaybackPositionWriter,
     consumeStalkerReturnMarker,
     createDiscoverFacetNavigation,
     resolveStalkerBackNavigation,
@@ -96,7 +97,9 @@ import {
     CrossPortalSimilarItem,
     CrossPortalSimilarService,
     PlaybackPositionRuntimeBridgeService,
+    SettingsStore,
     TmdbEnrichmentService,
+    type TmdbMatchContext,
     injectTranslationTick,
 } from '@iptvnator/services';
 import { StalkerSeriesTmdbSeasonsService } from './stalker-series-tmdb-seasons.service';
@@ -171,6 +174,7 @@ interface StalkerSeriesPlaybackRequestContext {
 })
 export class StalkerSeriesViewComponent implements OnDestroy {
     readonly stalkerStore = inject(StalkerStore);
+    private readonly settingsStore = inject(SettingsStore);
     readonly heroPresenter = inject(StalkerSeriesHeroPresenter);
     readonly menu = inject(StalkerSeriesMenuService);
     private readonly episodeResolver = inject(StalkerEpisodeResolver);
@@ -200,7 +204,19 @@ export class StalkerSeriesViewComponent implements OnDestroy {
     private currentSeriesPlaybackOwnerKey = '';
     private readonly inlinePlaybackEpisodeIdentity =
         signal<StalkerEpisodePlaybackStructuralIdentity | null>(null);
-    private lastSaveTime = 0;
+    /** Shared writer with the resume latch (see Stalker VOD playback). */
+    private readonly positionWriter = createInlinePlaybackPositionWriter({
+        playback: this.inlinePlayback,
+        save: (playlistId, position) =>
+            void this.positions
+                .persistSeriesPosition(playlistId, position)
+                .catch((error: unknown) => {
+                    this.logger.error(
+                        'Failed to persist inline series position',
+                        error
+                    );
+                }),
+    });
     private unsubscribePositionUpdates: (() => void) | null = null;
     readonly openingEpisodeId = signal<number | null>(null);
     readonly activeEpisodeId = signal<number | null>(null);
@@ -231,6 +247,25 @@ export class StalkerSeriesViewComponent implements OnDestroy {
     readonly providerOnly = input(false);
 
     readonly selectedItem = this.stalkerStore.selectedItem;
+    readonly tmdbMatch = computed<TmdbMatchContext | null>(() => {
+        const item = this.displayItem();
+        const playlistId = this.stalkerStore.currentPlaylist()?._id;
+        if (!item?.id || !playlistId) return null;
+        return {
+            identity: {
+                provider: 'stalker',
+                catalog:
+                    this.stalkerStore.selectedContentType() === 'series'
+                        ? 'series'
+                        : 'vod',
+                playlistId,
+                mediaType: 'tv',
+                itemId: String(item.id),
+            },
+            title: item.info.name,
+            tmdbId: item.info.tmdb_id,
+        };
+    });
 
     private readonly tmdbSeasons = inject(StalkerSeriesTmdbSeasonsService);
     private readonly crossPortalSimilar = inject(CrossPortalSimilarService);
@@ -240,8 +275,7 @@ export class StalkerSeriesViewComponent implements OnDestroy {
 
     /**
      * TMDB recommendations found in the user's Xtream portals (batched DB
-     * match, Electron only) — Stalker catalogs are server-paginated, so
-     * "Similar" can only point at OTHER portals' libraries.
+     * match, Electron only). The detail host supplies current-portal matches.
      */
     private readonly similarInPortalsMatched = signal<CrossPortalSimilarItem[]>(
         []
@@ -716,12 +750,17 @@ export class StalkerSeriesViewComponent implements OnDestroy {
             const base = this.isVodSeries()
                 ? mapVodSeriesEpisodes(this.vodSeriesSeasons(), {
                       parentSeriesId: this.toSeriesId(displayItem?.id ?? 0),
+                      mode: 'lazy',
+                      activityParentSeriesId: displayItem?.id ?? 0,
                       fallbackPoster: displayItem?.info?.movie_image,
                   })
                 : mapRegularSeriesEpisodes(
                       this.regularSeasons(),
                       displayItem?.info?.movie_image,
-                      this.seriesSeasonTitle()
+                      this.seriesSeasonTitle(),
+                      displayItem?.id ?? 0,
+                      this.vodWithSeries() ? 'embedded' : 'regular',
+                      [displayItem?.info?.name, displayItem?.info?.o_name]
                   );
 
             // Overlay lazily fetched TMDB episode data (real names,
@@ -775,7 +814,10 @@ export class StalkerSeriesViewComponent implements OnDestroy {
         getSeriesEpisodeMetadata(this.inlineEpisodeState())
     );
     readonly inlineSeriesNavigation = computed(() =>
-        getSeriesPlaybackNavigation(this.inlineEpisodeState())
+        getSeriesPlaybackNavigation(
+            this.inlineEpisodeState(),
+            this.settingsStore.seriesAutoplay?.() !== false
+        )
     );
     /** "Up Next" rail entries for the inline player (series only). */
     readonly upNextEpisodes = computed<UpNextRailItem[]>(() =>
@@ -1095,33 +1137,14 @@ export class StalkerSeriesViewComponent implements OnDestroy {
         this.inlinePlayback.set(null);
         this.inlinePlaybackEpisodeIdentity.set(null);
         this.playbackSessionKey.set('');
-        this.lastSaveTime = 0;
+        this.positionWriter.reset();
     }
 
     handleInlineTimeUpdate(event: {
         currentTime: number;
         duration: number;
     }): void {
-        const playback = this.inlinePlayback();
-        if (!playback?.contentInfo) return;
-
-        const now = Date.now();
-        if (now - this.lastSaveTime <= 15000) return;
-
-        this.lastSaveTime = now;
-        const position: PlaybackPositionData = {
-            ...playback.contentInfo,
-            positionSeconds: Math.floor(event.currentTime),
-            durationSeconds: Math.floor(event.duration),
-        };
-        void this.positions
-            .persistSeriesPosition(playback.contentInfo.playlistId, position)
-            .catch((error: unknown) => {
-                this.logger.error(
-                    'Failed to persist inline series position',
-                    error
-                );
-            });
+        this.positionWriter.handleTimeUpdate(event);
     }
 
     showCopyNotification(): void {
@@ -1294,13 +1317,19 @@ export class StalkerSeriesViewComponent implements OnDestroy {
                           ...playback,
                           contentInfo: {
                               ...playback.contentInfo,
+                              ...(episode.activityIdentity
+                                  ? {
+                                        activityIdentity:
+                                            episode.activityIdentity,
+                                    }
+                                  : {}),
                               seasonNumber: episodeState.seasonNumber,
                               episodeNumber: episodeState.episodeNumber,
                           },
                       }
                     : playback;
 
-            this.lastSaveTime = 0;
+            this.positionWriter.reset();
             if (request.usesEmbeddedPlayer && request.identity) {
                 this.setInlinePlayback(resolvedPlayback, request.identity);
                 return;

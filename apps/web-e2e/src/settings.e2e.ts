@@ -50,6 +50,25 @@ test.describe('Settings', () => {
         await page.waitForURL(/\/workspace\/dashboard$/);
     });
 
+    test('@settings @web text can be selected with the mouse', async ({
+        page,
+    }) => {
+        await openSettings(page);
+        const subtitle = page.getByText(
+            'Language, startup and channel preferences.'
+        );
+        await expect(subtitle).toBeVisible();
+        await page.evaluate(() => document.fonts.ready.then(() => undefined));
+        await subtitle.hover({ position: { x: 1, y: 8 } });
+        await page.mouse.down();
+        await subtitle.hover({ position: { x: 120, y: 8 } });
+        await page.mouse.up();
+
+        expect(
+            await page.evaluate(() => window.getSelection()?.toString())
+        ).toContain('Language');
+    });
+
     test('@settings @web settings opening the session lead to the dashboard', async ({
         page,
     }) => {
@@ -113,6 +132,7 @@ test.describe('Settings', () => {
 
     test('@settings @web Change app theme', async ({ page }) => {
         await openSettings(page);
+        await openSettingsSection(page, 'appearance');
         // v0.22 compact theme picker exposes the segmented control as a
         // radiogroup with options labelled just "Light"/"Dark"/"System".
         // Scope to the theme radiogroup so we don't collide with the
@@ -130,6 +150,7 @@ test.describe('Settings', () => {
         await saveSettings(page);
         await page.reload();
         await openSettings(page);
+        await openSettingsSection(page, 'appearance');
 
         await expect(
             themeGroup.getByRole('radio', { name: 'Dark', exact: true })
@@ -193,6 +214,7 @@ test.describe('Settings', () => {
         page,
     }) => {
         await openSettings(page);
+        await openSettingsSection(page, 'appearance');
 
         const unsavedBar = page.locator(
             '[data-test-id="settings-unsaved-bar"]'
@@ -212,7 +234,7 @@ test.describe('Settings', () => {
             unsavedBar.locator('[data-test-id="settings-unsaved-message"]')
         ).toHaveText('1 unsaved change');
         await expect(
-            page.locator('[data-test-id="settings-section-dirty-general"]')
+            page.locator('[data-test-id="settings-section-dirty-appearance"]')
         ).toBeVisible();
 
         // The staged edit belongs to the page, not the section — moving to
@@ -220,7 +242,7 @@ test.describe('Settings', () => {
         await openSettingsSection(page, 'playback');
         await expect(unsavedBar).toBeVisible();
         await expect(
-            page.locator('[data-test-id="settings-section-dirty-general"]')
+            page.locator('[data-test-id="settings-section-dirty-appearance"]')
         ).toBeVisible();
         await expect(
             page.locator('[data-test-id="settings-section-dirty-playback"]')
@@ -229,10 +251,10 @@ test.describe('Settings', () => {
         await page.locator('[data-test-id="discard-settings"]').click();
         await expect(unsavedBar).toBeHidden();
         await expect(
-            page.locator('[data-test-id="settings-section-dirty-general"]')
+            page.locator('[data-test-id="settings-section-dirty-appearance"]')
         ).toHaveCount(0);
 
-        await openSettingsSection(page, 'general');
+        await openSettingsSection(page, 'appearance');
         await expect(
             themeGroup.getByRole('radio', { name: 'System', exact: true })
         ).toHaveAttribute('aria-checked', 'true');
@@ -240,6 +262,7 @@ test.describe('Settings', () => {
 
     test('@settings @web Ctrl+S saves the staged edits', async ({ page }) => {
         await openSettings(page);
+        await openSettingsSection(page, 'appearance');
         await page
             .locator('[data-test-id="select-theme"] [data-test-id="DARK_THEME"]')
             .click();
@@ -253,6 +276,7 @@ test.describe('Settings', () => {
         await expect(unsavedBar).toBeHidden();
         await page.reload();
         await openSettings(page);
+        await openSettingsSection(page, 'appearance');
         await expect(
             page
                 .locator('[data-test-id="select-theme"]')
@@ -351,6 +375,7 @@ test.describe('Settings', () => {
         page,
     }) => {
         await openSettings(page);
+        await openSettingsSection(page, 'appearance');
 
         const themeGroup = page.locator(
             '[data-test-id="select-theme"][role="radiogroup"]'
@@ -370,7 +395,7 @@ test.describe('Settings', () => {
         // Keep editing: navigation is cancelled, the edit survives.
         await dialog.locator('[data-test-id="unsaved-dialog-stay"]').click();
         await expect(dialog).toBeHidden();
-        await expect(page).toHaveURL(/\/workspace\/settings\/general$/);
+        await expect(page).toHaveURL(/\/workspace\/settings\/appearance$/);
         await expect(
             page.locator('[data-test-id="settings-unsaved-bar"]')
         ).toBeVisible();
@@ -387,6 +412,7 @@ test.describe('Settings', () => {
         await page.waitForURL(/\/workspace\/dashboard$/);
 
         await openSettings(page);
+        await openSettingsSection(page, 'appearance');
         await expect(
             themeGroup.getByRole('radio', { name: 'System', exact: true })
         ).toHaveAttribute('aria-checked', 'true');
@@ -396,6 +422,7 @@ test.describe('Settings', () => {
         page,
     }) => {
         await openSettings(page);
+        await openSettingsSection(page, 'appearance');
 
         const themeGroup = page.locator(
             '[data-test-id="select-theme"][role="radiogroup"]'
@@ -416,6 +443,7 @@ test.describe('Settings', () => {
 
         await page.reload();
         await openSettings(page);
+        await openSettingsSection(page, 'appearance');
         await expect(
             themeGroup.getByRole('radio', { name: 'Dark', exact: true })
         ).toHaveAttribute('aria-checked', 'true');

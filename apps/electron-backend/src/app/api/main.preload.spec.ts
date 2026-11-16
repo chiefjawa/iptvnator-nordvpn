@@ -144,6 +144,39 @@ describe('main preload DB IPC contract', () => {
         expect(mockIpcRenderer.send).not.toHaveBeenCalled();
     });
 
+    it('uses the saved connection IPC contract for reading, reconnecting and forgetting', async () => {
+        const api = getExposedApi();
+        const saved = {
+            apiUrl: 'https://nas.test/api',
+            instanceId: 'saved-instance',
+            hasToken: true,
+        };
+        mockIpcRenderer.sendSync.mockReturnValueOnce(saved);
+        expect(api.sourceSyncSavedConnection?.()).toEqual(saved);
+        expect(mockIpcRenderer.sendSync).toHaveBeenLastCalledWith(
+            'SOURCE_SYNC:SAVED_CONNECTION'
+        );
+
+        await api.sourceSyncConfigure?.(
+            saved.apiUrl,
+            '',
+            true,
+            saved.instanceId
+        );
+        expect(mockIpcRenderer.invoke).toHaveBeenLastCalledWith(
+            'SOURCE_SYNC:CONFIGURE',
+            saved.apiUrl,
+            '',
+            true,
+            saved.instanceId
+        );
+
+        await api.sourceSyncForget?.();
+        expect(mockIpcRenderer.invoke).toHaveBeenLastCalledWith(
+            'SOURCE_SYNC:FORGET'
+        );
+    });
+
     it('covers every worker-backed DB operation exposed by the preload bridge', () => {
         const workerChannels = dbPreloadCases
             .map((contractCase) => contractCase.channel)
@@ -184,6 +217,25 @@ describe('main preload DB IPC contract', () => {
         }
     );
 
+    it('forwards explicit Origin separately from credentials and Referer', async () => {
+        const api = getExposedApi();
+        await api.setUserAgent(
+            undefined,
+            'https://referer.example/watch',
+            'https://stream.example/live.m3u8',
+            undefined,
+            'https://explicit.example'
+        );
+        expect(mockIpcRenderer.invoke).toHaveBeenLastCalledWith(
+            'set-user-agent',
+            undefined,
+            'https://referer.example/watch',
+            'https://stream.example/live.m3u8',
+            undefined,
+            'https://explicit.example'
+        );
+    });
+
     it('forwards scoped user-agent override arguments', async () => {
         const api = getExposedApi();
 
@@ -198,6 +250,7 @@ describe('main preload DB IPC contract', () => {
             'ChannelAgent/1.0',
             'https://portal.example/referrer',
             'https://stream.example/live.m3u8',
+            undefined,
             undefined
         );
     });
@@ -223,7 +276,8 @@ describe('main preload DB IPC contract', () => {
             {
                 authorization: 'Bearer TOKEN',
                 cookie: 'mac=00%3A1A%3A79%3A00%3A00%3A01',
-            }
+            },
+            undefined
         );
     });
 

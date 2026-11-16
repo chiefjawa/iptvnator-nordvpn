@@ -180,42 +180,61 @@ test.describe('Electron Catalog Sorting', () => {
         }
     });
 
-    test('does not expose local sorting controls on Stalker category routes', async ({
+    test('offers Stalker movie watch refinement without local catalog sorting', async ({
         dataDir,
         request,
     }) => {
         await resetMockServers(request, ['stalker']);
         const app = await launchElectronApp(dataDir);
+        const page = app.mainWindow;
 
         try {
-            await addStalkerPortal(app.mainWindow);
-            await waitForStalkerCatalog(app.mainWindow);
+            await addStalkerPortal(page);
+            await waitForStalkerCatalog(page);
 
+            const refine = page.getByRole('button', {
+                name: 'Refine',
+                exact: true,
+            });
+            await expect(refine).toBeVisible();
             await expect(
-                app.mainWindow.getByRole('button', {
-                    name: 'Refine',
+                page.getByRole('button', { name: 'Sort channels' })
+            ).toHaveCount(0);
+            await refine.click();
+            const checkbox = page.getByRole('menuitemcheckbox', {
+                name: 'Hide watched',
+                exact: true,
+            });
+            await expect(checkbox).toBeEnabled();
+            await expect(checkbox).toHaveAttribute('aria-checked', 'false');
+            await expect(page.getByRole('menuitemradio')).toHaveCount(0);
+            await expect(
+                page.locator('.refine-rating-trigger, .refine-watch-trigger')
+            ).toHaveCount(0);
+            await checkbox.click();
+            await expect(
+                page.getByRole('button', {
+                    name: 'Clear hide watched filter',
                     exact: true,
                 })
-            ).toHaveCount(0);
-            await expect(
-                app.mainWindow.getByRole('button', { name: 'Sort channels' })
-            ).toHaveCount(0);
+            ).toBeVisible();
 
-            await openWorkspaceSection(app.mainWindow, 'Movies');
+            await openWorkspaceSection(page, 'Series');
+            await expectPathname(page, /\/series$/);
+            await expect(refine).toHaveCount(0);
+
+            await openWorkspaceSection(page, 'Movies');
+            await expectPathname(page, /\/vod$/);
+            await expect(refine).toBeVisible();
             await expect(
-                app.mainWindow.getByRole('button', {
-                    name: 'Refine',
+                page.getByRole('button', {
+                    name: 'Clear hide watched filter',
                     exact: true,
                 })
-            ).toHaveCount(0);
-
-            await openWorkspaceSection(app.mainWindow, 'Series');
-            await expect(
-                app.mainWindow.getByRole('button', {
-                    name: 'Refine',
-                    exact: true,
-                })
-            ).toHaveCount(0);
+            ).toBeVisible();
+            await refine.click();
+            await expect(checkbox).toHaveAttribute('aria-checked', 'true');
+            await expect(page.getByRole('menuitemradio')).toHaveCount(0);
         } finally {
             await closeElectronApp(app);
         }
@@ -323,7 +342,11 @@ test.describe('Electron Catalog Sorting', () => {
                 type: 'vod',
             });
             await clearCatalogSearch(app.mainWindow);
-            await expectDetailRoundTripRestoresScroll(app.mainWindow);
+            await expectDetailRoundTripRestoresScroll(
+                app.mainWindow,
+                undefined,
+                vodFixture.totalItems
+            );
 
             await openWorkspaceSection(app.mainWindow, 'Series');
             await clickCategoryByVisibleName(
@@ -336,7 +359,11 @@ test.describe('Electron Catalog Sorting', () => {
                 categoryId: seriesFixture.categoryId,
                 type: 'series',
             });
-            await expectDetailRoundTripRestoresScroll(app.mainWindow);
+            await expectDetailRoundTripRestoresScroll(
+                app.mainWindow,
+                undefined,
+                seriesFixture.totalItems
+            );
         } finally {
             await closeElectronApp(app);
         }
@@ -452,6 +479,46 @@ async function expectCatalogGrowsOnScroll(page: Page): Promise<number> {
     return catalogCardCount(page);
 }
 
+/** The category's item total, as the catalog header's subtitle states it. */
+async function catalogTotalItems(page: Page): Promise<number> {
+    const totalText = await page
+        .locator('.category-content-header .category-subtitle')
+        .first()
+        .textContent();
+    return Number(/\d+/.exec(totalText ?? '')?.[0] ?? 0);
+}
+
+/**
+ * Scrolls the catalog grid to its bottom. While the category still has items
+ * to load, the infinite-scroll window must append more cards. The poster grid
+ * requests the next page two rows ahead, so a small category (the Stalker
+ * mock's 40 items) can already be complete after its first scroll: then every
+ * item must be rendered and there is nothing left to append. `expectedTotal`,
+ * the size the portal itself reports, keeps the app's own subtitle honest (it
+ * drops to the loaded count when an append stalls). Returns the card count.
+ */
+async function scrollCatalogToEnd(
+    page: Page,
+    expectedTotal?: number
+): Promise<number> {
+    const grid = catalogGrid(page);
+    await expect(grid).toBeVisible({ timeout: 20000 });
+    const totalItems = await catalogTotalItems(page);
+    if (expectedTotal !== undefined) {
+        expect(totalItems).toBe(expectedTotal);
+    }
+    const countBefore = await catalogCardCount(page);
+    if (!(totalItems > 0) || countBefore < totalItems) {
+        return expectCatalogGrowsOnScroll(page);
+    }
+
+    expect(countBefore).toBe(totalItems);
+    await grid.evaluate((element: HTMLElement) => {
+        element.scrollTo({ top: element.scrollHeight });
+    });
+    return countBefore;
+}
+
 /**
  * From a grown, scrolled-down grid: opens a visible (bottom) card's detail,
  * navigates back, and expects both the render window and the scroll offset to
@@ -459,9 +526,10 @@ async function expectCatalogGrowsOnScroll(page: Page): Promise<number> {
  */
 async function expectDetailRoundTripRestoresScroll(
     page: Page,
-    detailPathname?: RegExp
+    detailPathname?: RegExp,
+    expectedTotal?: number
 ): Promise<void> {
-    const grownCount = await expectCatalogGrowsOnScroll(page);
+    const grownCount = await scrollCatalogToEnd(page, expectedTotal);
     await expect.poll(() => getCatalogGridScrollTop(page)).toBeGreaterThan(100);
 
     // The last card is already in view at the bottom — clicking it does not
@@ -496,11 +564,7 @@ async function expectStalkerCatalogAppendsOnScroll(
     const grid = catalogGrid(page);
     await expect(grid).toBeVisible({ timeout: 20000 });
 
-    const totalText = await page
-        .locator('.category-content-header .category-subtitle')
-        .first()
-        .textContent();
-    const totalItems = Number(/\d+/.exec(totalText ?? '')?.[0] ?? 0);
+    const totalItems = await catalogTotalItems(page);
     const countBefore = await catalogCardCount(page);
     if (countBefore < totalItems) {
         await grid.evaluate((element: HTMLElement) => {

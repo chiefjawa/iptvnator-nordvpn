@@ -31,6 +31,7 @@ import EmbeddedMpvEvents, {
 } from '../events/embedded-mpv.events';
 import EpgEvents from '../events/epg.events';
 import AppUpdateEvents from '../events/app-update.events';
+import { disposePrivatePlayerIpcEndpoints } from '../events/mpv-ipc-endpoint';
 import { shutdownMpvSession } from '../events/mpv-session.service';
 import PlayerEvents from '../events/player.events';
 import { shutdownVlcSession } from '../events/vlc-session.service';
@@ -52,6 +53,7 @@ import {
 import { databaseWorkerClient } from '../services/database-worker-client';
 import type { bootstrapWindowCloseGuard } from '../services/window-close-guard.service';
 import { scheduleDeferredFixPath } from './login-shell-path';
+import { stopHostedServerForRestart } from '../services/hosted-server.service';
 import { registerSourceSyncEvents } from '../events/source-sync.events';
 import {
     registerMultiplexHandlers,
@@ -103,7 +105,10 @@ export function bootstrapDeferredEvents(
     registerSourceProbeCancellation();
     registerConnectivityGuardHandlers();
     registerMultiplexHandlers();
-    registerSourceSyncEvents(shutdownDeferredServices);
+    registerSourceSyncEvents(async () => {
+        await stopHostedServerForRestart();
+        shutdownDeferredServices();
+    });
     DatabaseEvents.bootstrapDatabaseEvents();
     EpgEvents.bootstrapEpgEvents();
     RemoteControlEvents.bootstrapRemoteControlEvents();
@@ -146,6 +151,7 @@ export function shutdownDeferredServices(): void {
     shutdownMpvSession();
     shutdownVlcSession();
     shutdownMultiplex();
+    disposePrivatePlayerIpcEndpoints();
     void databaseWorkerClient.shutdown();
 }
 

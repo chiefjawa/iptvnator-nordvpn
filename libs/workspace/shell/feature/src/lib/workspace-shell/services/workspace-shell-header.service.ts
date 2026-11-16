@@ -5,6 +5,7 @@ import { TranslateService } from '@ngx-translate/core';
 import { injectTranslationTick } from '@iptvnator/services';
 import {
     PlaylistInfoComponent,
+    playlistInfoDialogConfig,
     PlaylistRefreshActionService,
 } from '@iptvnator/playlist/shared/ui';
 import {
@@ -57,11 +58,16 @@ export class WorkspaceShellHeaderService {
         const context = this.routeState.currentContext();
         const action = this.headerContext.action();
 
-        if (!action || context?.provider !== 'playlists') {
+        if (!action || !context) {
             return null;
         }
-
-        return action;
+        const owner = action.owner;
+        if (!owner) return context.provider === 'playlists' ? action : null;
+        return owner.provider === context.provider &&
+            owner.playlistId === context.playlistId &&
+            owner.section === this.routeState.currentSection()
+            ? action
+            : null;
     });
     /**
      * The live rail of the current route, when the route renders one itself.
@@ -74,9 +80,11 @@ export class WorkspaceShellHeaderService {
             this.routeState.currentSection()
         )
     );
-    readonly headerSidebarToggle = computed<WorkspaceHeaderSidebarToggle | null>(
-        () => {
+    readonly headerSidebarToggle =
+        computed<WorkspaceHeaderSidebarToggle | null>(() => {
             this.languageTick();
+
+            if (this.headerShortcut()?.hidesContextPanel?.()) return null;
 
             const surface = this.liveSidebarSurface();
             if (!surface) {
@@ -93,8 +101,7 @@ export class WorkspaceShellHeaderService {
                         : 'LAYOUT.HIDE_CHANNELS_LIST'
                 ),
             };
-        }
-    );
+        });
     readonly canOpenPlaylistInfo = computed(() =>
         Boolean(this.routeState.activePlaylist())
     );
@@ -102,14 +109,12 @@ export class WorkspaceShellHeaderService {
         const playlist = this.routeState.activePlaylist();
         return Boolean(
             playlist &&
-                (isXtreamAccountPlaylist(playlist) ||
-                    isStalkerAccountPlaylist(playlist))
+            (isXtreamAccountPlaylist(playlist) ||
+                isStalkerAccountPlaylist(playlist))
         );
     });
     readonly canRefreshPlaylist = computed(() =>
-        this.playlistRefreshAction.canRefresh(
-            this.routeState.activePlaylist()
-        )
+        this.playlistRefreshAction.canRefresh(this.routeState.activePlaylist())
     );
     readonly playlistSubtitle = computed(() => {
         this.languageTick();
@@ -181,9 +186,10 @@ export class WorkspaceShellHeaderService {
             return;
         }
 
-        this.dialog.open(PlaylistInfoComponent, {
-            data: playlist,
-        });
+        this.dialog.open(
+            PlaylistInfoComponent,
+            playlistInfoDialogConfig(playlist)
+        );
     }
 
     openAccountInfo(): void {
@@ -209,8 +215,7 @@ export class WorkspaceShellHeaderService {
                 // only apply when the dialog targets the active playlist.
                 ...(isActivePlaylist
                     ? {
-                          vodStreamsCount:
-                              this.xtreamStore.vodStreams().length,
+                          vodStreamsCount: this.xtreamStore.vodStreams().length,
                           liveStreamsCount:
                               this.xtreamStore.liveStreams().length,
                           seriesCount: this.xtreamStore.serialStreams().length,

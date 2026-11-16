@@ -1155,6 +1155,10 @@ programmes near the visible range. On the runner
 734 mutations per run, except one iteration with a fifth bridge call and
 748 mutations.
 
+The Xtream multi-channel guide adds actions to Live TV and its EPG panel.
+The single-channel ribbon writes each programme card's position and width
+together in one style update to keep J3 within the existing mutation budget.
+
 `renderer.ipcSerialDepthToPlaying` came later. One local macOS
 `perf:journeys` run on 2026-10-10 read 3 in all six iterations, warm-up
 included, with `depthLowerBound` 3, no ambiguous completion and no call in
@@ -1189,8 +1193,9 @@ the M3U arm runs as well, because live content is included, but none of the
 four fixture channels matches. Poster artwork points at `picsum.photos` and
 is cancelled in the main process as in J3
 (`src/performance/journey-external-artwork.ts`, shared by both journeys);
-the count is kept as `evidence.externalArtworkCancelled`. The mock is not
-put behind the request ledger: global search reads only the local database.
+the count is kept as `evidence.externalArtworkCancelled`. This profile uses
+only the local database because it has M3U and Xtream sources. It runs without
+the mock request ledger.
 
 **What typing does.** The header search box
 (`app-workspace-shell-header .search-field input[type="search"]`) applies
@@ -1276,8 +1281,9 @@ the second character on would show a `dbGlobalSearch` call and its
 statements in each of those entries, even when a later key superseded the
 result.
 
-No counter is listed under `unavailable`. HTTP requests are not a J4
-counter: global search does not touch the network.
+No counter is listed under `unavailable`. J4 measures the local catalog path
+with its M3U and Xtream fixture. A desktop profile with Stalker portals also
+searches those portals when the applied query and filters qualify.
 
 ### Wall-clock
 
@@ -1379,8 +1385,11 @@ persisted status (`xtream-import-status:<id>:<type>`) reads `completed` and
 the type has rows, unless the portal has no categories of that type. Rows
 are required because a refresh deletes the catalog without resetting the
 status. `xtream-import-wait.e2e.ts` holds the account check past the overlay
-window and fails without it. Two J4 counters are enforced since #1899
-(see [Enforced journey counters](#enforced-journey-counters)).
+window and fails without it. Tests reopening a persisted source from outside
+the Xtream workspace can use `waitForXtreamCatalog(page, { cached: true })`.
+That path checks SQLite, waits for the renderer's catalog initialization
+to finish, and waits for any overlay to clear. Two J4 counters are enforced
+since #1899 (see [Enforced journey counters](#enforced-journey-counters)).
 
 ## `renderer.initialBytes`
 
@@ -1438,6 +1447,31 @@ replace with
 `performance-build-config.spec.ts` keeps it that way. Removing the static
 import lowered the counter by 12,565 bytes.
 
+Browser-only Xtream proxy handling lives in
+`apps/web/src/app/services/pwa-xtream-request.ts`, loaded on demand by
+`PwaService`. Its HTTP cancellation, error normalization, response handling and
+silent-action policy stay outside the initial Electron payload; renderer-local
+abort signals are
+never serialized across IPC. Keep that boundary when adding browser transport
+behavior rather than increasing the initial-byte baseline.
+
+The renderer loads the accent color calculations on demand when a custom
+accent is active or Appearance renders its swatches. The About page's
+release-version check belongs to the lazy settings route.
+
+Playlist history transformations and Xtream recent-item operations likewise load
+on first history access or action. Keep their data writes inside the existing
+playlist queue and capture source/profile ownership before loading write helpers.
+Full M3U/Stalker source reads and inventories with history await the archive
+helper; Xtream initialization awaits its recent-item helper before exposing the
+source. A loaded view must retain first-write/clear/remove behavior if the UI
+host goes offline without a service worker.
+
+The global notification panel uses the same `shouldEnableServiceWorker()`
+contract as registration to load the PWA card. Its coordinator, translation
+rendering and Material button stay in that deferred browser chunk; Electron
+does not load them at boot. Recovery controls persist independently of temporary snack-bars.
+
 The bundler keeps each module in one chunk, so one eager import of any
 export carries the module's whole code: providing
 `MAT_FORM_FIELD_DEFAULT_OPTIONS` in `app.config.ts` alone put the 54 KB
@@ -1477,6 +1511,14 @@ import dispatch code into `main.js` even on launches without a file. The
 listener's tests preserve immediate acknowledgment, sequential imports and
 retry after a failed chunk load. This is a loading-boundary change with no
 new user-facing behavior; no feature flag or baseline increase is needed.
+
+EPG read helpers also load on demand: source importing and settings hydration
+do not need the programme-scope and channel-metadata lookup implementations.
+The first subscribed lookup loads their shared module; concurrent calls share
+it, failed chunk loads can retry, and source-revision guards retire requests
+before they can use a late module. The public Observable APIs and source
+priority rules stay the same. This loading boundary needs no feature flag or
+baseline increase.
 
 `--summary` writes the journey summary shape (`journeys.<journey>.counters`)
 that the ratchet checker consumes. `--dist <dir>` points the script at another
@@ -1549,6 +1591,26 @@ pushes to `master`; a stacked PR that targets another branch gets no run until
 it is retargeted, so dispatch one with `gh workflow run ci.yml --ref <branch>`
 when you need the number. A PR that grows the counter fails that job.
 
+The same job uploads the production renderer output to Codecov Bundle Analysis
+as `iptvnator-renderer`, using the pinned standalone analyzer CLI and
+`tools/performance/codecov-bundle.json`. It runs after the existing build,
+before the ratchet, so a size regression still produces a bundle report.
+The analyzer measures all emitted assets, including lazy chunks, by raw size
+and estimates gzip size for compressible formats; source maps are excluded.
+It does not report the modules inside
+each chunk and its total is not the `renderer.initialBytes` startup counter.
+This is informational reporting; upload failures do not fail CI and the
+existing ratchet remains the merge gate. Uploads authenticate through GitHub
+OIDC and run on master, manual dispatches and same-repository PRs; fork and
+Dependabot PRs skip the upload.
+The CLI is installed on demand in that Linux job because its package supports
+only Linux and macOS; it is not a workspace dependency. For a local report
+without uploading, run after a production build:
+
+```bash
+pnpm dlx @codecov/bundle-analyzer@2.0.1 dist/apps/web --config-file=tools/performance/codecov-bundle.json --dry-run
+```
+
 That runner is the canonical measurer: take baseline values from its output,
 not from a local build. A local macOS build of the code before #1695 is 2
 bytes smaller in `main.js` (the eager locale imports); since #1695 the two
@@ -1581,8 +1643,8 @@ stays and is not part of the evidence.
 The job also refuses a weakened baselines file:
 `tools/performance/check-baseline-direction.mjs` compares
 `journey-baselines.json` with the revision the change is measured against
-(the target branch of a pull request, the previous head of a `master` push,
-`master` for a manual dispatch) and fails when any
+(the first parent of the tested PR merge commit, the previous head of a
+`master` push, or `master` for a manual dispatch) and fails when any
 entry's enforced limit (`value × toleranceRatio` or `value + slack`) went up,
 a tolerance or slack widened or an entry disappeared, so a PR cannot grow the
 payload and raise the baseline to match. A counter's `value` may not go up
@@ -1625,10 +1687,11 @@ Playwright config starts the Xtream mock), writes the measurements to the job
 summary and uploads `dist/performance/journeys/` as the `performance-journeys`
 artifact. The `Performance journeys scope` job skips it only for pull
 requests that change nothing but Markdown, `docs/**`, `.plans/**`,
-`.codex/**`, `.claude/**`, `.changes/**` or `apps/website/**` (the E2E
-workflow's ignore list plus release notes); any other file, including root
-build inputs such as `.nvmrc`, `nx.json` or `tsconfig.base.json`, runs it.
-Pushes to `master` and manual dispatches always run it. The job was introduced
+`.agents/**`, `.codex/**`, `.claude/**`, `.changes/**` or `apps/website/**`.
+It compares the merge tree with its first parent and treats moves as a
+deletion and an addition. An unavailable diff or any other changed path,
+including root build inputs such as `.nvmrc`, `nx.json` or `tsconfig.base.json`,
+runs the journeys. Pushes to `master` and manual dispatches always run them. The job was introduced
 as warn-only (`continue-on-error: true`) in #1717. PR #1926 (plan item B3)
 removes that setting, so a regression fails the workflow. On `master`, the
 blocking policy takes effect when #1926 is merged, not on its commit or

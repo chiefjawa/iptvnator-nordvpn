@@ -73,6 +73,15 @@ Registered endpoints:
 - `POST /api/remote-control/volume/toggle-mute`
 - `GET /api/remote-control/status`
 
+Command POSTs require `application/json` (an optional charset is accepted).
+Before dispatching any API request, including status reads, the HTTP server
+rejects cross-site browser requests and origins other than its own
+`http://<host>:<port>`. The Host must name the
+listening interface, localhost, or the machine's hostname/mDNS name at the
+actual listener port; arbitrary DNS aliases are rejected to prevent DNS
+rebinding. JSON clients without an Origin header remain supported on the
+trusted LAN. Rejected requests return JSON HTTP 403 and never reach IPC.
+
 IPC emitted to renderer:
 
 - `CHANNEL_CHANGE` payload: `{ direction: 'up' | 'down' }`
@@ -97,6 +106,19 @@ Status ingestion from renderer:
 - Main handler: `apps/electron-backend/src/app/events/settings.events.ts`
 - On `SETTINGS_UPDATE`, reads `remoteControl` and `remoteControlPort`, persists to store, and calls:
     - `httpServer.updateSettings(enabled, port)`
+- Listener transitions are awaited and serialized. Bind errors reject the
+  settings update without leaving a running listener; subsequent updates can
+  retry. Startup logs an unavailable port without an unhandled rejection.
+  Disabling the server or changing ports closes active HTTP connections so an
+  unfinished request body cannot hold the settings queue open.
+- The settings form awaits the backend update before confirming success. An
+  apply failure keeps the form available for retry and explains that the saved
+  preferences could not be applied, separately from a storage-write failure.
+  Edits made while a save is pending remain dirty after the submitted values
+  are saved; save-and-leave stays on settings when newer changes remain.
+  Overlapping saves use a revision guard: older completions cannot overwrite
+  the latest saved snapshot, mirror older values to Electron after a cleanup
+  wait, or report stale failures after a newer save.
 
 ## Preload Bridge
 
@@ -139,10 +161,18 @@ Xtream and Stalker live views keep a component-owned playback queue through
 captures the actual displayed order, including search/sort and a fullscreen
 panel's own filter. Remote up/down, numeric selection and the published channel
 number use that queue while category or search browsing remains independent.
+The Xtream programme guide numbers its visible rows in the same order after
+applying its channel and EPG filters.
+In Xtream, up or down returns from an archive to the same channel's live
+stream if it is the only channel in the queue.
+When the external player stays open after its stream stops, Xtream keeps the
+last eligible channel as the tuning anchor and clears the now-playing details.
 Xtream history handoffs from global search or Recently Added capture the
 eligible destination category in the selected channel sort order; an unrelated
 previous category/query does not define that queue. Explicit All Items clicks
-still capture their displayed list. Same-channel replay and remote selection preserve it. Source/type changes and
+still capture their displayed list. An external archive launched from an
+Xtream preview uses its displayed order once playback opens. Same-channel
+replay and remote selection preserve the current queue. Source/type changes and
 view destruction discard it; ITV and radio never share an owner.
 
 Stalker captures before asynchronous URL resolution and commits only the winning
@@ -153,7 +183,8 @@ categories from eligible queue entries.
 
 A conditional **Show playing channel** icon in the channel header appears when
 the playing channel is absent from the browsed results and its category remains
-accessible. It clears `q` and the store query, returns to that category, expands
+accessible. Xtream checks the exact category copy of the playing stream.
+It clears `q` and the store query, returns to that category, expands
 the sidebar, then scrolls and focuses the playing row. It never starts playback
 or changes the playback/session/catchup identity. A collapsed sidebar first uses
 its existing restore action. Removed categories are not recreated or unhidden.

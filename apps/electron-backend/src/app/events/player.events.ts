@@ -16,6 +16,7 @@ import {
     normalizePlayerPathForStore,
     resolveExternalPlayerLaunchContext as resolveLaunchContext,
 } from './external-player-launch-context';
+import { externalPlayerAvailable } from './external-player-availability';
 import {
     externalPlayerSessions,
     traceExternalPlayer,
@@ -63,6 +64,32 @@ export default class PlayerEvents {
 }
 
 ipcMain.handle(
+    'GET_EXTERNAL_PLAYER_AVAILABILITY',
+    async (_event, paths?: { mpv?: string; vlc?: string }) => {
+        const mpv =
+            typeof paths?.mpv === 'string'
+                ? paths.mpv
+                : store.get(MPV_PLAYER_PATH);
+        const vlc =
+            typeof paths?.vlc === 'string'
+                ? paths.vlc
+                : store.get(VLC_PLAYER_PATH);
+        const [mpvAvailable, vlcAvailable] = await Promise.all([
+            externalPlayerAvailable('mpv', mpv, {
+                waitForSearchPath: waitForLoginShellPath,
+            }),
+            externalPlayerAvailable('vlc', vlc, {
+                waitForSearchPath: waitForLoginShellPath,
+            }),
+        ]);
+        return {
+            mpv: mpvAvailable,
+            vlc: vlcAvailable,
+        };
+    }
+);
+
+ipcMain.handle(
     'OPEN_MPV_PLAYER',
     async (
         _event,
@@ -74,7 +101,8 @@ ipcMain.handle(
         origin?: string,
         contentInfo?: PlayerContentInfo,
         startTime?: number,
-        headers?: Record<string, string>
+        headers?: Record<string, string>,
+        launchId?: string
     ) => {
         await waitForPathIfBareName('mpv', store.get(MPV_PLAYER_PATH));
         return openMpvPlayer({
@@ -87,6 +115,7 @@ ipcMain.handle(
             contentInfo,
             startTime,
             headers,
+            launchId,
         });
     }
 );
@@ -118,7 +147,8 @@ ipcMain.handle(
         origin?: string,
         contentInfo?: PlayerContentInfo,
         startTime?: number,
-        headers?: Record<string, string>
+        headers?: Record<string, string>,
+        launchId?: string
     ) => {
         await waitForPathIfBareName('vlc', store.get(VLC_PLAYER_PATH));
         return openVlcPlayer({
@@ -131,6 +161,7 @@ ipcMain.handle(
             contentInfo,
             startTime,
             headers,
+            launchId,
         });
     }
 );
@@ -152,8 +183,8 @@ ipcMain.handle('SET_VLC_REUSE_INSTANCE', (_event, reuseInstance: boolean) => {
 
 ipcMain.handle(
     CLOSE_EXTERNAL_PLAYER_SESSION,
-    async (_event, sessionId: string) => {
-        return externalPlayerSessions.closeSession(sessionId);
+    async (_event, sessionId: string, exact?: boolean) => {
+        return externalPlayerSessions.closeSession(sessionId, exact === true);
     }
 );
 

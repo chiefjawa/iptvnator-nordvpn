@@ -56,9 +56,25 @@ Omit `pnpm nx migrate --run-migrations` when the first command reports that no
 migrations exist. Major Nx updates always use this manual workflow and the
 resulting PR runs the full CI pipeline.
 
+Nx 24.0.4 uses inferred Jest and ESLint tasks instead of the removed
+`@nx/jest:jest` and `@nx/eslint:lint` executors. The Jest plugin includes only
+the projects migrated from that executor; Angular ESM command targets retain
+their existing runner, environment and workspace-root configuration. Preserve
+the scoped `test` defaults for the Jest plugin, including its `ci` configuration,
+and the per-project lint inputs carried forward by the converter. Jest commands
+retain the workspace working directory and pass their project config explicitly,
+so subprocess fixtures and file-based contracts keep their previous paths.
+The marketing-fixtures target retains its `.cts` config through a command override.
+Shared ESLint config patterns have an explicit workspace base path so inferred
+project-local lint commands preserve existing rule scopes and baseline entries.
+Coverage tooling reads resolved Nx project targets, including inferred tasks;
+raw `project.json` alone is no longer a complete target inventory.
+`affected.legacy` keeps the previous project-level affected selection during
+this toolchain migration.
+
 ## Angular 22 Toolchain Compatibility
 
-Angular framework/Material 22.1 and CLI/build 22.1 use Nx 23.2 and TypeScript
+Angular 22 and CLI/build 22.2.5 use Nx 24.0.4 and TypeScript
 6.0. Framework and CLI patch numbers may differ; keep framework packages aligned
 in both dependency sections and all official Nx packages on one exact version.
 Use `.nvmrc` for development/CI (Node 24.22.1); supported LTS Node ranges are
@@ -82,12 +98,14 @@ TypeScript 6 migration settings preserve compiler defaults and per-project outpu
 `ignoreDeprecations: "6.0"` temporarily supports legacy Node test configs and
 `baseUrl`, rather than changing the whole workspace to browser resolution.
 
-Two third-party packages need scoped compatibility bridges in
+Third-party packages need scoped compatibility bridges in
 `pnpm-workspace.yaml`:
 
 - `nx-electron@22.0.0` still declares Nx 22 peers. Its existing package-layout
   patch also changes the removed `@nx/js/src/utils/buildable-libs-utils` import
-  to `@nx/js/internal`. A package extension supplies its undeclared runtime
+  to `@nx/js/internal`. Scoped peer allowances select Nx 24.0.4; revalidate them
+  with the executor/package tests and real Electron builds on upgrades.
+  A package extension supplies its undeclared runtime
   dependency `webpack-node-externals`. The packaging suite loads every executor
   and checks the single application manifest. Remove these bridges only after
   the upstream package declares and implements the current Nx APIs.
@@ -97,6 +115,10 @@ Two third-party packages need scoped compatibility bridges in
   `iptvnator` v1 database, retains the `_id` key path, and checks reload
   persistence. The shared interfaces package declares the same library version.
   Remove the allowance when upstream includes the installed Angular version.
+- `videojs-quality-selector-hls@1.1.1` imports Babel runtime helpers from its
+  CommonJS entry but lists `@babel/runtime` only as a development dependency.
+  A package extension supplies the existing Babel 7 runtime. Remove it when
+  upstream declares that runtime dependency; player-import unit tests cover it.
 
 Jest uses root Babel 7 while Angular build retains its own Babel 8. The website
 uses Astro 7 with the root TypeScript 6; no Astro-specific compiler package
@@ -120,12 +142,12 @@ runtimes.
 
 ## Vite Dev-Server Patch
 
-Angular's development builder resolves Vite `8.1.5`. It contains upstream precise
-asset/worker URL matchers, but also uses them as raw-code prefilters. Those
-prefilters reject valid expressions containing comments before the handlers can
-strip the comments and apply the precise matchers.
+Angular's development builder (`@angular/build` 22.2.5) resolves Vite `8.3.5`.
+It contains upstream precise asset/worker URL matchers, but also uses them as
+raw-code prefilters. Those prefilters reject valid expressions containing
+comments before the handlers can strip the comments and apply the precise matchers.
 
-`patches/vite@8.1.5.patch` adds bounded asset/worker prefilters and uses the asset
+`patches/vite@8.3.5.patch` adds bounded asset/worker prefilters and uses the asset
 prefilter for bundled URL rewriting too. The precise handler matchers remain
 unchanged. This preserves the earlier protection against expensive scanning of
 large false-positive chunks and retains comment-bearing expressions. Remove the
@@ -284,6 +306,11 @@ the lazy workspace shell feature into the initial bundle.
 
 ## Import Aliases and Public APIs
 
+`@iptvnator/shared/testing/runtime-coverage` is a Node-only test entry. It keeps
+Istanbul, esbuild hooks and temporary coverage files out of the browser-safe
+`shared-testing` barrel. Its build target lets buildable database tests consume
+that public entry without weakening dependency boundaries. Runtime code does not import it.
+
 Use scoped aliases from `tsconfig.base.json` and expose public imports through a
 library's `src/index.ts`. Do not introduce legacy bare aliases such as
 `services`, `components`, `shared-interfaces`, or `database`, and avoid deep
@@ -302,6 +329,27 @@ context panel use, out of that barrel for the same reason, and
 `@iptvnator/services/playlist-backup` keeps `PlaylistBackupService` (about
 22 KB, used only by the lazy settings page) out of the `@iptvnator/services`
 barrel.
+
+`@iptvnator/services/clipboard-copy` keeps the clipboard fallback out of that
+barrel. Downloads and Xtream details import it from their lazy routes so
+startup does not fetch code that runs only on a copy action.
+
+`@iptvnator/services/xtream-catalog-refresh` keeps the edit-time catalog scanner
+with the lazy source editor. Do not re-export it from the eager services barrel;
+ordinary startup does not need the editor's network and recovery orchestration.
+`@iptvnator/services/xtream-catalog-restore` similarly exposes dormant restore
+storage outside that barrel. The Electron data source loads it through a local
+dynamic-import wrapper only for restoration or source cleanup; startup services
+load it only when explicitly clearing history or sources. Ordinary Refresh uses
+a project-local `xtream-refresh-recovery` wrapper for the same cold boundary.
+The Electron data source also loads its project-local `xtream-category-import`
+helper only for cold category fills or failed-cache cleanup. Completed cache reads
+return before that import, preserving the warm path's startup work and IPC count.
+Shared catalog availability checks stay outside the eager services barrel in
+`xtream-catalog-availability`, reused by explicit offline restore and route replay.
+Full user-state replay also stays in the local `xtream-deferred-restore` module;
+the data source delegates to it only when restoring a backup or failed import,
+or when the legacy cache-snapshot API is explicitly invoked.
 
 `@iptvnator/services/source-sync/connection` and
 `@iptvnator/services/source-sync/profile-user-data` expose the bootstrap helpers
@@ -342,6 +390,15 @@ entry for lazy consumers. Eager provider data access calls `loadTmdbMergers`, wh
 local dynamic import defers that implementation until metadata enrichment, then
 checks the current selection again before applying it. This keeps age metadata
 off the launch path without changing the module-boundary rules.
+`@iptvnator/shared/tmdb/season` exposes the season client separately so optional
+season requests do not pull their response handling into eager metadata imports.
+The shared root barrel retains its type only; Angular and TV consumers use the
+explicit entry for construction.
+
+`@iptvnator/shared/tmdb/matcher` likewise exposes the pure confidence matcher
+without re-exporting its runtime functions from the eager shared/services
+barrels. Asynchronous metadata lookups load it through their local matcher loader;
+lightweight title helpers remain direct shared-interface imports.
 
 The web app's root shell (`app.component.ts`, `app.config.ts` and the services
 they construct) is on the renderer's initial path, where a barrel costs its
@@ -355,8 +412,8 @@ entries: `@iptvnator/ui/components/window-controls`,
 `@iptvnator/ui/components/confirm-dialog`,
 `@iptvnator/playlist/shared/ui/stalker-connection-editor`,
 `@iptvnator/playlist/shared/util/playlist-file-import` (the barrel would add
-`PlaylistContextFacade`) and `@iptvnator/pipes/date-format` (the barrel would
-add `SafePipe`; the eager EPG progress panel uses it too), like the existing
+`PlaylistContextFacade`) and `@iptvnator/pipes/date-format` (also used by the
+eager EPG progress panel), like the existing
 `@iptvnator/ui/epg/progress-panel`, and loads anything used only on demand
 through a local file it imports dynamically (the Stalker connection editor,
 the release-notes dialog, the external-player info dialog, the parental-lock
@@ -366,6 +423,14 @@ not the library alias, is the dynamic-import target because
 `@nx/enforce-module-boundaries` forbids static imports of a library the same
 project also loads dynamically.
 
+The lazy `/workspace` route is entered at every start, so the workspace shell
+follows the same rule: it imports `EmbeddedMpvOverlayVisibilityService` from
+`@iptvnator/ui/playback/embedded-mpv-player` and re-exports the global
+favourites list from `@iptvnator/portal/shared/ui/global-favorites-list`.
+Either barrel puts the web players (video.js, hls.js, mpegts.js, ArtPlayer,
+about 2.7 MB) on the first route; a `no-restricted-imports` block in
+`eslint.config.mjs` keeps both barrels out of `libs/workspace/shell/feature`.
+
 A barrel the initial path imports also costs code it never runs itself:
 code splitting places a module in the chunk shared by every entry point
 that reaches it, so a helper that only lazy routes use, but that an eager
@@ -374,12 +439,27 @@ though tree shaking would drop it from a single bundle. The eager Xtream
 data layer and root shell therefore import `@iptvnator/portal/shared/util/logger`
 and `@iptvnator/portal/shared/util/tokens` (the portal DI tokens), not the
 `@iptvnator/portal/shared/util` barrel, whose navigation, keyboard-shortcut
-and download helpers (about 45 KB) belong to the lazy portal routes. A
-type-only import of a barrel uses `import type`, so it can never keep the
+and download helpers (about 45 KB) belong to the lazy portal routes.
+Packaged renderer reload recovery uses the pure
+`@iptvnator/portal/shared/util/collection-view-state` entry, which keeps its
+validator separate from other navigation code; the navigation barrel
+re-exports the same API for route consumers. Recovery itself loads only for
+an actual restore request, never on ordinary startup.
+A type-only import of a barrel uses `import type`, so it can never keep the
 barrel reachable. `renderer.initialBytes` in
 [performance journeys](performance-journeys.md) guards the result; to see why a
 module is eager, build with `pnpm nx build web --stats-json` and follow the
 static imports in `dist/apps/web/stats.json` from `apps/web/src/main.ts`.
+
+The Xtream category visibility ledger uses
+`@iptvnator/shared/interfaces/xtream-category-visibility` for its runtime key and
+parser. The main shared-interface barrel exports only its type, keeping this
+backup/recovery code out of the initial renderer graph.
+
+The root Xtream store keeps its lightweight detail-request generation guard
+separate from sparse VOD reconstruction. It loads the reconstruction module after
+the detail response and rechecks the guard before publishing or recovering data,
+so opening a source does not load movie-detail recovery code.
 
 For a buildable library that has a local `package.json`, its `name` must match
 the scoped alias. Nx uses that package name when rewriting buildable dependency
@@ -482,3 +562,8 @@ The CI lint job runs affected projects on pull requests and all projects on
 master pushes. Root config or lockfile changes affect every project, so module
 boundaries, legacy-alias restrictions, and max-lines enforcement apply across
 the workspace.
+
+
+`@iptvnator/shared/m3u-utils/favorites` keeps global M3U favorites aggregation
+outside the eager utility barrel. The explicit favorites action helper imports
+it lazily; ordinary source inventory/bootstrap does not need that projection.

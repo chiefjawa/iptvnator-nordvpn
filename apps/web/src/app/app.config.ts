@@ -1,3 +1,8 @@
+import { HISTORY_PLAYLIST_BRIDGE } from '@iptvnator/services/history-events';
+import { historyPlaylistBridgeFactory } from './services/history-sync.providers';
+import { FAVORITES_PLAYLIST_BRIDGE } from '@iptvnator/services/favorites-events';
+import { favoritesPlaylistBridgeFactory } from './services/favorites-sync.providers';
+import { PLAYBACK_ACTIVITY_EVENTS } from '@iptvnator/services/activity-events';
 import {
     HttpClient,
     provideHttpClient,
@@ -43,12 +48,19 @@ import { ElectronService } from './services/electron.service';
 import { ExternalPlaybackService } from './services/external-playback.service';
 import { PlayerService } from './services/player.service';
 import { provideParentalLockPrompt } from './services/parental-lock-prompt.service';
+import {
+    activityDataSourceFactory,
+    activityEventsFactory,
+} from './services/activity-sync.providers';
 import { providePortalPlaybackPositions } from './services/portal-playback-positions.service';
 import { PwaService } from './services/pwa.service';
 import { shouldEnableServiceWorker } from './services/runtime-config';
 import { LazyStalkerPlaylistConnectionEditor } from './services/lazy-stalker-playlist-connection-editor';
 import { provideWorkspaceShellActions } from './services/workspace-shell-actions.service';
-import { provideSourceSync, sourceAuthInterceptor } from './services/source-sync.providers';
+import {
+    provideSourceSync,
+    sourceAuthInterceptor,
+} from './services/source-sync.providers';
 
 // AoT requires an exported function for factories
 export function HttpLoaderFactory(http: HttpClient): TranslateHttpLoader {
@@ -95,7 +107,11 @@ export const appConfig: ApplicationConfig = {
         // fullscreen channel panel's sort/context menus and the controls'
         // tooltips render while the player is fullscreen.
         { provide: OverlayContainer, useClass: FullscreenOverlayContainer },
-        provideHttpClient(withXhr(), withInterceptorsFromDi(), withInterceptors([sourceAuthInterceptor])),
+        provideHttpClient(
+            withXhr(),
+            withInterceptorsFromDi(),
+            withInterceptors([sourceAuthInterceptor])
+        ),
         provideStore({
             router: routerReducer,
             playlistState: playlistReducer,
@@ -142,7 +158,19 @@ export const appConfig: ApplicationConfig = {
         ...provideWorkspaceShellActions(),
         ...provideParentalLockPrompt(),
         provideParentalLockPlaylistCleanup(),
-        ...provideXtreamDataSource(),
+        {
+            provide: HISTORY_PLAYLIST_BRIDGE,
+            useFactory: historyPlaylistBridgeFactory,
+        },
+        {
+            provide: FAVORITES_PLAYLIST_BRIDGE,
+            useFactory: favoritesPlaylistBridgeFactory,
+        },
+        ...provideXtreamDataSource(activityDataSourceFactory),
+        {
+            provide: PLAYBACK_ACTIVITY_EVENTS,
+            useFactory: activityEventsFactory,
+        },
         ...provideSourceSync(),
     ],
 };

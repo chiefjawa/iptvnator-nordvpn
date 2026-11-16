@@ -162,7 +162,8 @@ describe('EmbeddedMpvSessionController', () => {
         expect(electron.createEmbeddedMpvSession).toHaveBeenCalledWith(
             { x: 10.6, y: 20.5, width: 640, height: 360 },
             'Example Movie',
-            0.7
+            0.7,
+            false
         );
         expect(electron.loadEmbeddedMpvPlayback).toHaveBeenCalledWith(
             'mpv-1',
@@ -341,14 +342,14 @@ describe('EmbeddedMpvSessionController', () => {
 });
 
 function createHost(): HTMLElement {
-    return {
+    return Object.assign(document.createElement('div'), {
         getBoundingClientRect: () => ({
             left: 10.6,
             top: 20.5,
             width: 640,
             height: 360,
         }),
-    } as HTMLElement;
+    });
 }
 
 function createPlayback(): ResolvedPortalPlayback {

@@ -1,5 +1,8 @@
 import {
     Component,
+    ElementRef,
+    forwardRef,
+    inject,
     input,
     output,
     signal,
@@ -16,7 +19,10 @@ import { MatTooltip } from '@angular/material/tooltip';
 import { ActivatedRoute, convertToParamMap, Router } from '@angular/router';
 import { TranslatePipe, TranslateService } from '@ngx-translate/core';
 import { EMPTY, ReplaySubject, of } from 'rxjs';
-import { InfiniteScrollDirective } from '@iptvnator/portal/shared/ui';
+import {
+    GridListComponent,
+    InfiniteScrollDirective,
+} from '@iptvnator/portal/shared/ui';
 import {
     MenuItemRadioCheckDirective,
     MenuItemRadioDirective,
@@ -26,16 +32,33 @@ import {
     PORTAL_CATALOG_FACADE,
     PortalCatalogSortMode,
     PortalWatchStateFilter,
+    PortalCatalogHideWatched,
 } from '@iptvnator/portal/shared/util';
 import { CategoryContentViewComponent } from './category-content-view.component';
+import { registerHideWatchedCases } from './testing/category-hide-watched.cases';
 
 @Component({
     selector: 'app-grid-list',
     standalone: true,
     changeDetection: ChangeDetectionStrategy.Eager,
     template: '',
+    providers: [
+        {
+            provide: GridListComponent,
+            useExisting: forwardRef(() => MockGridListComponent),
+        },
+    ],
 })
 class MockGridListComponent {
+    private readonly host: HTMLElement = inject(ElementRef).nativeElement;
+    restoreScrollPosition(top: number): void {
+        this.host.scrollTo({ top });
+    }
+    readonly refinementActive = input(false);
+    readonly sourceHasMore = input(false);
+    readonly loadMorePaused = input(false);
+    readonly continueLoading = output<void>();
+    readonly clearRefinement = output<void>();
     readonly isLoading = input<boolean>();
     readonly isAppending = input<boolean>();
     readonly appendError = input<boolean>();
@@ -104,6 +127,7 @@ describe('CategoryContentViewComponent', () => {
         retryContent: jest.fn(),
         contentSortMode,
         supportsRatingSort: true,
+        hideWatched: undefined as PortalCatalogHideWatched | undefined,
         supportsWatchStateFilter: false,
         watchStateFilter,
         watchFilterLoadState,
@@ -137,6 +161,7 @@ describe('CategoryContentViewComponent', () => {
     };
 
     beforeEach(async () => {
+        catalog.hideWatched = undefined;
         routeReady.set(true);
         catalog.contentType.set('vod');
         catalog.supportsWatchStateFilter = false;
@@ -1185,6 +1210,21 @@ describe('CategoryContentViewComponent', () => {
             expect(catalog.loadMore).toHaveBeenCalledTimes(1);
         });
 
+        it('asks for the next page two poster rows ahead of the bottom', () => {
+            const infiniteFixture = createInfiniteFixture();
+            categoryItemCount.set(12);
+            catalog.paginatedContent.set([{ xtream_id: 1, title: 'A' }]);
+
+            infiniteFixture.detectChanges();
+
+            const directive = infiniteFixture.debugElement
+                .query(By.directive(InfiniteScrollDirective))
+                .injector.get(InfiniteScrollDirective);
+            // The append is deferred past the key press's frame: the lead keeps
+            // a row below the focus while the next page renders.
+            expect(directive.infiniteThresholdPx()).toBe(640);
+        });
+
         it('strips a stale page query param instead of paging', () => {
             const infiniteFixture = createInfiniteFixture();
             queryParamMap$.next(convertToParamMap({ page: '3' }));
@@ -1277,6 +1317,13 @@ describe('CategoryContentViewComponent', () => {
 
             expect(scrollTo).toHaveBeenCalledWith({ top: 0 });
         });
+    });
+    registerHideWatchedCases({
+        getFixture: () => fixture,
+        catalog,
+        isPaginatedContentLoading,
+        categoryItemCount,
+        hasMore,
     });
 });
 

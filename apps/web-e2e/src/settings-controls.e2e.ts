@@ -2,9 +2,11 @@ import type { Locator, Page } from '@playwright/test';
 import { expect, test } from './fixtures';
 import { newServerPage } from './server-storage-pwa.helpers';
 
-async function openSection(page: Page, section = 'general') {
+async function openSection(page: Page, section = 'appearance') {
     await page.goto(`/workspace/settings/${section}`);
-    await expect(page.locator('.settings-container')).toBeVisible();
+    await expect(page.locator('.settings-container')).toBeVisible({
+        timeout: 20000,
+    });
 }
 
 async function expectRovingGroup(group: Locator, selected: Locator) {
@@ -91,7 +93,10 @@ for (const theme of ['Light', 'Dark'] as const) {
         page,
     }) => {
         await openSection(page);
-        await page.getByRole('radio', { name: theme, exact: true }).click();
+        await page
+            .locator('[data-test-id="select-theme"]')
+            .getByRole('radio', { name: theme, exact: true })
+            .click();
         await page.locator('[data-test-id="save-settings"]').click();
         await page.locator('[data-test-id="settings-section-backup"]').click();
         const importButton = page.getByRole('button', {
@@ -118,40 +123,56 @@ for (const theme of ['Light', 'Dark'] as const) {
 }
 
 for (const theme of ['light', 'dark'] as const) {
-    test(`@settings @self-hosted ${theme} shared-source actions retain the kit primary and secondary roles`, async ({
+    test(`@settings @self-hosted ${theme} shared-source actions use the kit primary, secondary and destructive roles`, async ({
         browser,
     }) => {
         const page = await newServerPage(browser);
         try {
             await page.emulateMedia({ colorScheme: theme });
-            await page.goto('/workspace/settings/server');
-            const section = page.locator('app-settings-server-section');
-            const connect = section.locator(
-                '[data-test-id="source-server-connect"]'
-            );
-            await expect(connect).toBeVisible();
-            await expect(connect).toHaveClass(/settings-primary-button/);
-            await expect(connect).toHaveCSS('height', '40px');
-            await expect(connect).toHaveCSS('border-top-left-radius', '10px');
-            const refresh = section.getByRole('button', {
-                name: 'Refresh',
+            await openSection(page, 'server');
+            const section = page.locator('#server');
+            const connect = section.getByRole('button', {
+                name: 'Connected',
                 exact: true,
             });
-            await expect(refresh).toHaveCSS('height', '40px');
-            await expect(refresh).toHaveCSS('border-top-style', 'none');
-            await expect(
-                section.locator('[data-test-id="source-server-import"]')
-            ).toHaveCSS('border-top-left-radius', '10px');
-            await expect(
-                section.getByRole('button', { name: 'Disconnect', exact: true })
-            ).toHaveCSS('border-top-style', 'none');
+            const check = section.getByRole('button', {
+                name: 'Check connection',
+                exact: true,
+            });
+            const importSources = section.getByRole('button', {
+                name: 'Import local sources',
+                exact: true,
+            });
+            const disconnect = section.getByRole('button', {
+                name: 'Disconnect',
+                exact: true,
+            });
+            await expect(connect).toBeDisabled();
+            await expect(connect).toHaveCSS('opacity', '0.4');
+            await expect(connect).toHaveClass(/settings-primary-button/);
+            await expect(disconnect).toHaveClass(/app-destructive-button/);
+            for (const button of [connect, check, importSources, disconnect]) {
+                await expect(button).toHaveCSS('height', '40px');
+                await expect(button).toHaveCSS(
+                    'border-top-left-radius',
+                    '10px'
+                );
+                await expect(button).toHaveCSS('border-top-style', 'none');
+            }
+
             const background = (button: Locator) =>
                 button.evaluate(
                     (element) => getComputedStyle(element).backgroundColor
                 );
-            expect(await background(connect)).not.toBe(
-                await background(refresh)
-            );
+            const secondary = await background(check);
+            expect(await background(importSources)).toBe(secondary);
+            expect(await background(connect)).not.toBe(secondary);
+            expect(await background(disconnect)).not.toBe(secondary);
+
+            await check.press('Tab');
+            await expect(importSources).toBeFocused();
+            await check.press('Enter');
+            await expect(check).toBeEnabled();
         } finally {
             await page.context().close();
         }

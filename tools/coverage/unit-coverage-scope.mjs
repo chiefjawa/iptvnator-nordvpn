@@ -13,13 +13,15 @@
  * allowlist of paths no Tier A test reads. Anything unknown runs the suite.
  *
  * Usage:
- *   git diff --name-only <base>...HEAD |
- *       node tools/coverage/unit-coverage-scope.mjs [--base <base>] [--github-output]
+ *   git diff --name-only -z --no-renames <base> HEAD -- |
+ *       node tools/coverage/unit-coverage-scope.mjs --null --base <base> [--github-output]
  */
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { readResolvedProjects } from './nx-coverage-projects.mjs';
 
 /**
  * Paths that no Tier A test imports or reads. Tier A specs only read files
@@ -87,13 +89,13 @@ export function isScriptsOnlyChange(basePackageJson, headPackageJson) {
 
 /**
  * Files outside a project that a Tier A test target declares as inputs
- * (`{workspaceRoot}/...` in its project.json). Nx already knows the test
+ * (`{workspaceRoot}/...` in its resolved Nx target). Nx already knows the test
  * reads them, so they always need the suite, whatever the allowlist says.
  */
-export function declaredWorkspaceInputs(tierAProjects, readProjectJson) {
+export function declaredWorkspaceInputs(tierAProjects, readProject) {
     const inputs = [];
     for (const project of tierAProjects) {
-        const testTarget = readProjectJson(project)?.targets?.test;
+        const testTarget = readProject(project)?.targets?.test;
         for (const input of testTarget?.inputs ?? []) {
             if (typeof input !== 'string') continue;
             const match = /^\{workspaceRoot\}\/(.+)$/.exec(input);
@@ -104,7 +106,10 @@ export function declaredWorkspaceInputs(tierAProjects, readProjectJson) {
 }
 
 export function isSkippable(file) {
-    return SKIPPABLE_PATTERNS.some((pattern) => pattern.test(file));
+    return (
+        !/[\r\n]/.test(file) &&
+        SKIPPABLE_PATTERNS.some((pattern) => pattern.test(file))
+    );
 }
 
 /**
@@ -140,7 +145,7 @@ export function decideUnitCoverageScope(
     { packageJsonScriptsOnly = false, declaredInputs = [] } = {}
 ) {
     const declared = declaredInputs.map(globToRegExp);
-    const changed = files.map((file) => file.trim()).filter(Boolean);
+    const changed = files.filter(Boolean);
     if (changed.length === 0) {
         return {
             run: true,
@@ -183,13 +188,9 @@ function gitShow(ref, file) {
     }
 }
 
-if (isMain) {
-    const argv = process.argv.slice(2);
-    const baseIndex = argv.indexOf('--base');
-    const base = baseIndex === -1 ? null : argv[baseIndex + 1];
-    const files = readFileSync(0, 'utf8').split('\n');
+export async function checkUnitCoverageScope(files, base) {
     let packageJsonScriptsOnly = false;
-    if (base && files.some((file) => file.trim() === 'package.json')) {
+    if (base && files.includes('package.json')) {
         const basePackageJson = gitShow(base, 'package.json');
         const headPackageJson = readFileSync('package.json', 'utf8');
         packageJsonScriptsOnly =
@@ -202,12 +203,10 @@ if (isMain) {
     const policy = JSON.parse(
         readFileSync('tools/coverage/coverage-policy.json', 'utf8')
     );
+    const resolvedProjects = await readResolvedProjects();
     const declaredInputs = declaredWorkspaceInputs(
         policy.unitCoverage.tierA,
-        (project) =>
-            JSON.parse(
-                readFileSync(path.join(project.root, 'project.json'), 'utf8')
-            )
+        (project) => resolvedProjects[project.name]
     );
     const decision = decideUnitCoverageScope(files, {
         packageJsonScriptsOnly,
@@ -215,12 +214,24 @@ if (isMain) {
     });
     console.log(`Tier A unit coverage: ${decision.run ? 'run' : 'skip'}. ${decision.reason}`);
     for (const file of decision.blocking.slice(0, 20)) {
-        console.log(`  needs tests: ${file}`);
+        console.log(`  needs tests: ${JSON.stringify(file)}`);
     }
     if (decision.blocking.length > 20) {
         console.log(`  … and ${decision.blocking.length - 20} more`);
     }
-    if (process.argv.includes('--github-output')) {
+    return decision;
+}
+
+if (isMain) {
+    const argv = process.argv.slice(2);
+    const baseIndex = argv.indexOf('--base');
+    const base = baseIndex === -1 ? null : argv[baseIndex + 1];
+    const input = readFileSync(0, 'utf8');
+    const files = argv.includes('--null')
+        ? input.split('\0')
+        : input.split('\n').map((file) => file.trim());
+    const decision = await checkUnitCoverageScope(files, base);
+    if (argv.includes('--github-output')) {
         const outputFile = process.env.GITHUB_OUTPUT;
         if (!outputFile) {
             console.error('--github-output needs GITHUB_OUTPUT to be set.');

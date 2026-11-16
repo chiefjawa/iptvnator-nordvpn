@@ -142,7 +142,7 @@ The flow is:
 7. For the native-view engine, the addon creates an app-owned platform video
    host inside the Electron window. For frame-copy, the preload frame pump
    attaches the session's shared-memory reader to
-   `<canvas data-embedded-mpv-frame>`.
+   `<canvas data-embedded-mpv-frame>` tagged with the matching `data-session-id`.
 8. On macOS native-view, the addon configures `vo=libmpv`, creates a
    `mpv_render_context`, and draws into the OpenGL surface. On Windows
    native-view, it creates an `mpv_handle`, disables MPV's own OSC/input
@@ -275,8 +275,14 @@ module's `isFrameCopyRuntimeUsable()` / `getFrameCopyRuntimeAvailability()`):
   `<canvas data-embedded-mpv-frame>` (BGRA swizzle in the shader). Frame
   copies whose post-copy seqlock check reports a writer race are discarded
   without advancing the consumed sequence, so the next rAF retries instead
-  of uploading partial pixels. Frame data never crosses the contextBridge;
-  the bridge only exposes
+  of uploading partial pixels. On a resize generation change, the pump keeps
+  the displayed canvas and texture unchanged until it copies a complete,
+  stable frame from the new ring. It then resizes the canvas, uploads that
+  frame and draws in the same animation tick, avoiding a cleared canvas while
+  the helper prepares its first resized frame. Detaching a session clears the
+  canvas so switching streams never retains the previous stream's image while
+  waiting for a new frame. Frame data never crosses the contextBridge; the
+  bridge only exposes
   `attachEmbeddedMpvFrameView`/`detachEmbeddedMpvFrameView`.
 - Renderer: `EmbeddedMpvPlayerComponent` renders the canvas when
   `support.engine === 'frame-copy'` and skips the compositor workarounds —
@@ -390,9 +396,11 @@ supplies the shared
 EGL/GL/GLX/GBM/DRM/VA userspace; the existing GNOME content runtime supplies
 ALSA/PulseAudio. These providers are external shared snaps, so their binaries,
 source, notices, and installed bytes are not part of the IPTVnator Snap or its
-compliance archive. CI installs and explicitly connects both providers for a
-locally installed `--dangerous` artifact, then runs the application-level
-probe under strict confinement.
+compliance archive. CI downloads missing prerequisites with their Snap Store
+assertions, acknowledges the assertions and installs the verified
+local files. This avoids depending on a Snap Store device session. CI explicitly
+connects both providers for the locally installed `--dangerous` IPTVnator
+artifact, then runs the application-level probe under strict confinement.
 
 The package carries the empty content target itself because core22 does not
 create `$SNAP` content targets while packing. Metadata verification rejects a
@@ -470,7 +478,11 @@ Trade-offs and constraints:
   Intel Macs keep the native-view engine. Official Linux frame-copy is x64 —
   headless EGL, works under native Wayland since nothing embeds into a
   window; local system builds need `libmpv-dev`, `libegl-dev`, `libgl-dev`,
-  and `libgbm-dev`. The helper links libmpv, which is legal
+  and `libgbm-dev`. Development runtime validation accepts frame-reader modes
+  `0644` and `0755`, including node-gyp's normal executable library output.
+  Packaged readers still require `0644`; helpers require `0755` in both
+  contracts. Symlinks, unreadable files and unexpected reader permission bits
+  remain rejected. The helper links libmpv, which is legal
   out-of-process; the in-process-libmpv ban still binds the addon and frame
   reader. The helper logs the chosen EGL display tier and the GL renderer
   string to stderr. If an early tier selects Mesa software rendering (for
@@ -506,6 +518,103 @@ Trade-offs and constraints:
   `error` (renderer falls back); it can never take down the Electron main
   process, unlike in-process libmpv.
 
+## Frame-copy multiview
+
+The Multiview action in the frame-copy player controls opens a menu to add a
+stream or open the 2×2 grid. In regular single-stream playback the stream bar
+is absent and the player occupies the full stage. Adding a second stream
+from single playback opens a floating window. Opening the grid explicitly
+with one stream shows three empty windows with an add action. The bar stays
+visible in the grid until the viewer exits multiview. Adding a third stream
+from Floating window or Side by side opens the grid.
+
+The shared picker opens through the existing dialog shell and can extend
+below the video into the app window. The playlist selector sits inside the
+search bar above the scrolling results. The picker opens on the current
+portal when available. Global favorites and recently viewed are also available
+in the selector. The portal and collection views have Live TV, Movies and Series
+filters. Live playlists offer groups and search. Channel rows reuse the
+sidebar's programme title, time range and progress. XMLTV previews are batched
+by guide scope, and Xtream and Stalker use the collection EPG resolver. The picker
+requests previews only near the visible list and honors the global EPG preference.
+It reads M3U, Xtream live and Stalker ITV catalogs independently of the active
+provider selection and uses the shared stream resolver, preserving playback
+metadata and parental locks. Xtream and Stalker also expose movies and a
+series-to-episode drill-down. The shared Xtream resolver loads its VOD details
+and recovery helpers when resolving a selected movie. Each added video's progress
+uses that video's playlist and content keys. It saves the latest accepted
+position when paused, ended, replaced or closed, including parental relock
+and player teardown. Episode positions retain the parent series and episode
+numbers. Additional videos start muted and record Recently Viewed once
+playback advances. Opening the same VOD twice would share a resume key, so
+the picker reports the already occupied window. Each open video requires
+its own provider connection. Live pause uses MPV pause.
+
+The primary stays in window 1. Companion windows have stable numbers 2–4
+that determine their positions in the grid. Closing a companion leaves its
+cell available for another stream. The global add button fills the lowest
+available number. Side by side and Floating window can be selected when
+there are exactly two open windows. Layout changes update CSS and native
+render bounds while preserving the mounted players and their playback.
+Clicking an equal pane or choosing its window in the bar selects the player
+for playback commands. A separate speaker action selects the sole audio
+session. Floating window makes the audio session the main video and
+restores the previous floating geometry.
+
+Replacing or retrying a stream operates on that window's session. When a
+companion with sound is replaced, the primary resumes sound before the
+replacement starts muted. A parental relock immediately hides the
+affected companion and retires its session. Sound returns to the primary
+after the outgoing session is silenced. Exiting multiview closes the
+companions and preserves the primary. Replacing the primary content or
+leaving the player ends the multiview session.
+
+Dragging the small video surface or using its arrow keys moves it anywhere
+inside the application viewport, including over channel and EPG panes. The
+existing small canvas and controls use manual DOM popovers to escape ancestor
+clipping without reparenting or remounting playback. Controls are promoted after
+the canvas on exchange/fullscreen changes. Both floating surfaces hide while a
+modal or backdrop overlay is active, retaining their sessions and yielding input
+to that overlay. Viewport-relative coordinates clamp
+the whole tile on viewport resize. Small-view width starts at 320 CSS pixels;
+its two lower corners show resize cursors. The window resizes at 16:9 between
+240 and 640 pixels, further limited by the viewport. Arrow keys and Home/End on the handles adjust width.
+Size changes update the mounted canvas bounds and preserve session IDs.
+Leaving fullscreen restores both prior window placement and preferred size.
+Rounded corners, a thin outline and a soft shadow separate the video from
+surrounding panes. Individual controls and labels use dark translucent backings rather than opaque full-width bars.
+Overlay controls appear on hover or keyboard focus (always visible on devices
+without hover). The channel picker traps focus and closes on selection, Escape
+or backdrop click, rather than disappearing on pointer leave. While a
+companion is open, primary end-of-file does not trigger episode autoplay.
+If sound transfer fails while closing, the companion still closes and the
+retained primary stays muted; its volume control remains available.
+
+Preload frame pumps, attach cancellation epochs, canvases and native readers
+are session-owned. The renderer binds `data-session-id` before attaching and
+passes that exact ID on detach. `createReader()` creates an independently
+mapped N-API reader with explicit close and a GC finalizer. Module-level
+reader methods remain available for existing runtime probes. A stale attach
+or a resize of one session cannot replace the other's reader or canvas.
+
+Frame-copy volume commands carry a per-helper request ID. The helper replies
+only after synchronous `mpv_set_property` completes; the adapter rejects a
+failed command, helper exit or a three-second acknowledgement timeout. The
+volume IPC awaits that acknowledgement. If command completion is ambiguous,
+the adapter terminates that exact helper (SIGTERM, then SIGKILL after 500 ms)
+and awaits its exit before rejecting IPC; the old controls cannot then unmute
+alongside a helper whose unmute may have succeeded. Main/small exchange disables
+player interaction, including Retry, while it mutes the outgoing session, awaits
+native completion, and then enables the incoming one. A failed mute never enables
+the incoming audio.
+The audio session retains its volume across Retry. Any other session
+restarts muted. Multiview state belongs to the current Embedded MPV player.
+
+The feature is available in Electron through the existing experimental
+frame-copy engine gate. Synthetic Electron coverage is in
+`two-stream-mpv.e2e.ts`, `two-stream-mpv-vod.e2e.ts`, and
+`multiview-grid-mpv.e2e.ts`.
+
 ## Resume And Track Handling
 
 `ResolvedPortalPlayback.startTime` is treated as a media offset in seconds for VOD and episodes. The native addon passes it as the `start` option in one MPV `loadfile` options map together with title, user agent, referrer, and HTTP headers.
@@ -519,6 +628,15 @@ Seeking has two IPC shapes. The timeline scrub commits one absolute target (`see
 Audio tracks are discovered from MPV's `track-list` property. The selected track is controlled through MPV's `aid` property. Switching tracks must not reload the stream.
 
 Subtitle tracks mirror the audio-track contract: same `track-list` source, same parsing pipeline, but selected through MPV's `sid` property. A `trackId` of `-1` from the renderer is interpreted as "disable subtitles" and translated to `sid=no` at the addon boundary. Playback speed is observed and set through MPV's `speed` property, clamped at the addon to `[0.25, 4.0]`. Aspect override uses MPV's `video-aspect-override` property as a passthrough string ("no", "16:9", "4:3", "21:9", "2.35:1"). All four properties (`sid`, `speed`, `video-aspect-override`, plus `aid`) are observed at session init so renderer state stays in sync with the native side without needing extra round-trips.
+
+During Live TV playback, the open player view remembers an explicit
+**Subtitles → Off** across channel changes and renderer retries. New sessions
+with subtitle controls append `sid=no` after the saved MPV options, before
+initialization. Picking a track clears the remembered Off; the track number
+only applies to the current stream. Loading an external subtitle file selects
+it for the current session and leaves the choice for the next channel intact.
+Closing the view discards the choice. The global caption setting and non-live
+playback are unaffected.
 
 File chapters come from MPV's `chapter-list` property, observed as a node next to `track-list` by the macOS and Windows addons and the frame-copy helper, and cleared on every `START_FILE` so a replacement file never shows the previous one's chapters. Each snapshot carries `chapters: [{ timeSeconds, title? }]` (the helper always emits the key, because the adapter merges snapshot events field by field); `EmbeddedMpvNativeService` validates it with `normalizeEmbeddedMpvChapters` into `EmbeddedMpvSession.chapters`, and an older binary without the field yields `[]`. The Linux `mpv --wid` poller does not read chapters. The renderer maps them to timeline segments — see "Timeline segments" in the [player controls contract](player-controls-contract.md).
 
@@ -609,6 +727,56 @@ are cleared, and disables the audio track to verify unavailable observations
 remove codec/channel/sample-rate rows without a new-file reset. This complements renderer mapping/unit coverage with
 the actual libmpv → helper JSON → main/preload path.
 
+## Jump to live (MPEG-TS)
+
+A live MPEG-TS stream (Xtream `.ts` output, or any M3U/Stalker URL mpv opens
+as `file-format` `mpegts`) is one endless HTTP response. Panels commonly
+answer a new connection with a burst of their own backlog (measured: ~13 MB,
+≈23–29 s of video, within 2.5 s) and then send at real-time rate. mpv plays
+from the start of that burst, so the viewer sits as far behind live as the
+burst is long, and every reconnect or channel change repeats it. The buffer
+then stays flat (`demuxer-cache-duration` ≈ 22–23 s).
+
+The live-edge button skips that backlog. `embedded-mpv-live-edge.ts` computes
+`bufferedAheadSeconds − 3` and the adapter sends it through the existing
+relative `seekBy` (`seek <delta> relative+exact`), so mpv seeks inside its
+demuxer cache. That works although mpv reports the stream as not seekable
+(the cached range is seekable). In a 70 s standalone libmpv 0.41 run with a
+2 s target this cut latency from ~23 s to ~3 s, with one ~1 s stall right
+after the jump and a stable 2–3.5 s buffer afterwards. TS self-heals: after a
+stall mpv waits for `cache-pause-wait` of data, and because data keeps
+arriving at 1×, that margin stays in the buffer. The 3 s target covers the
+measured per-second delivery jitter; lower targets brought no lasting gain.
+
+Rules:
+
+- **TS only.** HLS (`file-format` `hls`) is excluded on purpose. Its cache
+  ends at the newest *complete* segment; leaving 3 s there drains the buffer
+  long before the next segment (often ~10 s) arrives. That is a worse
+  `live_start_index=-1`, which in Embedded MPV stalled on every segment, each
+  followed by `restarting audio after underrun`, A/V resync and dropped
+  frames, without self-healing. A safe HLS jump needs the provider's segment
+  length, which the player does not know.
+- **Live only**, in a `playing` or `paused` session without a reconnect in
+  flight.
+- **Always enabled.** The button never disables itself: with ≤ 3 s buffered a
+  click does nothing, otherwise it jumps to 3 s. An earlier version disabled
+  it near the target, and because the buffer of a live TS stream swings by a
+  second or more with delivery jitter, the button flickered.
+- **Debounced for 2 s** after a jump: the snapshot that answers the seek can
+  still carry the pre-seek buffer, and a second jump computed from it would
+  seek past the end of the cache.
+- `seekBy` marks the reconnect resume point stale like any user seek, which is
+  irrelevant for live (the reconnect reloads the stream from its live edge).
+- The value comes from the polled snapshot and can be a few hundred
+  milliseconds old. The buffer only grows meanwhile, so the error is a
+  slightly larger reserve, never an overshoot.
+
+Engines: the gate needs `stats.container` and `stats.bufferedAheadSeconds`
+(see "Stream Stats Properties"). Frame-copy (shared controls) and the macOS
+and Windows native-view backends (legacy dock button) report both. The Linux
+out-of-process backend reports no stats, so the button never appears there.
+
 ## Session End And Series Navigation
 
 `EmbeddedMpvSessionStatus` includes `ended` for successful EOF only. The native addon maps `MPV_EVENT_END_FILE` to:
@@ -685,11 +853,15 @@ The list never appears on a command line: an option such as
 local user through `ps` / `/proc/<pid>/cmdline`.
 
 `EMBEDDED_MPV_NETWORK_DEFAULT_OPTIONS` (`network-timeout=10`,
-`demuxer-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=5`) are
+`demuxer-lavf-o=reconnect=1,reconnect_delay_max=5`) are
 part of that list on purpose: a stalled IPTV connection then surfaces as an
 mpv error within seconds instead of libmpv's 60 s default, and ffmpeg
-re-requests a dropped HTTP stream on its own before the app-level reconnect
-has to. Options mpv rejects never fail session creation, and a rejection is
+re-requests a dropped seekable HTTP response on its own before the app-level
+reconnect has to. `reconnect_streamed` is deliberately not set (#1682): ffmpeg
+records a response without `Content-Length` as unknown-size, so with it every
+normal end of an HLS playlist or segment served without a length counts as
+premature and is requested again, which stalls live HLS or keeps it from
+starting. Dropped live connections are left to the app-level reconnect below. Options mpv rejects never fail session creation, and a rejection is
 reported without any trace flag, by key only (a value may carry credentials):
 the Windows and macOS native-view engines collect the refused keys into the
 snapshot's `rejectedOptionKeys`, which the service logs once per session as a
@@ -841,6 +1013,8 @@ controls host. The renderer files live under
   adapter for frame-copy. Maps session/support/playback signals to shared
   controls state and capabilities, delegates commands to
   `EmbeddedMpvSessionController`, and projects series navigation and recording.
+- `embedded-mpv-controls-status.ts` maps support and session snapshots to the
+  shared controls status and translated message.
 - `embedded-mpv-controls-recording.ts` — frame-copy shared-controls recording
   coordinator. Serializes toggles, correlates command settlement with fresh
   same-owner snapshots, and cancels pending state on ownership or engine

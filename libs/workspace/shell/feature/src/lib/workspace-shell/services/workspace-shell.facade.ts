@@ -121,8 +121,16 @@ export class WorkspaceShellFacade {
     );
     readonly dashboardXtreamContext = this.routeState.dashboardXtreamContext;
     readonly contextPanel = this.routeState.contextPanel;
-    readonly showContextPanel = this.routeState.showContextPanel;
-    readonly hasContextPanelContent = this.routeState.hasContextPanelContent;
+    readonly showContextPanel = computed(
+        () =>
+            this.routeState.showContextPanel() &&
+            !this.header.headerShortcut()?.hidesContextPanel?.()
+    );
+    readonly hasContextPanelContent = computed(
+        () =>
+            this.routeState.hasContextPanelContent() &&
+            !this.header.headerShortcut()?.hidesContextPanel?.()
+    );
     readonly contextDrawerLabelKeys = this.routeState.contextDrawerLabelKeys;
     readonly showXtreamImportOverlay =
         this.xtreamImport.showXtreamImportOverlay;
@@ -131,6 +139,7 @@ export class WorkspaceShellFacade {
     readonly searchPlaceholder = this.search.searchPlaceholder;
     readonly searchScopeLabel = this.search.searchScopeLabel;
     readonly searchStatusLabel = this.search.searchStatusLabel;
+    readonly canClearCategoryScope = this.search.canClearCategoryScope;
     readonly railProviderClass = this.routeState.railProviderClass;
     readonly parentalLockState = computed<'off' | 'locked' | 'unlocked'>(() => {
         if (!this.parentalLock.enabled()) {
@@ -176,7 +185,7 @@ export class WorkspaceShellFacade {
 
     closeActiveExternalSession(): void {
         void this.externalPlayback
-            .closeSession(this.externalPlayback.activeSession())
+            .closeSession(this.externalPlayback.activeSession(), true)
             .catch(() => undefined);
     }
 
@@ -226,6 +235,10 @@ export class WorkspaceShellFacade {
 
     goBack(): void {
         this.backNavigation.goBack();
+    }
+
+    clearCategoryScope(): void {
+        this.search.clearCategoryScope();
     }
 
     navigateToGlobalFavorites(): void {

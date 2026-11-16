@@ -34,6 +34,7 @@ import { materializeSource } from './source-materializer';
 import { migrateLegacyPlaylistActivity } from './legacy-playlist-activity';
 import { recoverPendingStatelessBackend } from './pending-source-discovery';
 import { SourceCleanupQueue } from './source-cleanup-queue';
+import { retireFavoriteSourceContext } from '../favorites-sync/favorites-source-contexts';
 
 @Injectable({ providedIn: 'root' })
 export class SourceSyncService {
@@ -73,6 +74,10 @@ export class SourceSyncService {
     private metadataDirty = false;
     private cleanupQueue?: SourceCleanupQueue;
 
+    get hasCachedLibrary(): boolean {
+        return this.store?.ready ?? false;
+    }
+
     async initialize(): Promise<void> {
         if (!this.connection) {
             if (this.connectionReadFailed) {
@@ -86,15 +91,16 @@ export class SourceSyncService {
         const local = native
             ? { ...native }
             : indexedDbDocumentStore(this.db, sourceProfileName());
-        this.cleanupQueue = new SourceCleanupQueue(
-            local,
-            this.cleanups.map((cleanup) => (id) => {
+        this.cleanupQueue = new SourceCleanupQueue(local, [
+            (id) =>
+                retireFavoriteSourceContext(this.connection!.instanceId, id),
+            ...this.cleanups.map((cleanup) => (id: string) => {
                 // Cleanup may await settings, whose EPG reconciliation reads this
                 // store. Release that wait; ready=false still rejects partial reads.
                 this.backend.finishServerInitialization();
                 return cleanup(id);
-            })
-        );
+            }),
+        ]);
         const mutate = local.dbMutateAppPlaylist;
         if (mutate)
             local.dbMutateAppPlaylist = (id, update) =>
@@ -109,7 +115,8 @@ export class SourceSyncService {
             (request) => this.request(request),
             (source, current) => materializeSource(source, current, this.data),
             this.connection.instanceId,
-            (id, revision) => this.cleanupQueue!.prune(id, revision)
+            (id, revision) => this.cleanupQueue!.prune(id, revision),
+            (id) => retireFavoriteSourceContext(this.connection!.instanceId, id)
         );
         this.backend.installServerStore(this.store);
         let initialRefresh: Promise<void> | undefined;
@@ -154,7 +161,6 @@ export class SourceSyncService {
             .exclusive(async () => {
                 try {
                     const wasReady = this.store!.ready;
-                    this.errorKey.set(null);
                     if (!this.store!.ready) this.state.set('connecting');
                     // Finish previous deletions before a reused ID can be projected.
                     await this.cleanupQueue!.retry();
@@ -170,13 +176,14 @@ export class SourceSyncService {
                         )
                     )
                         return;
-                    assertSourceInstance(probe.body);
-                    if (probe.body.instanceId !== this.connection!.instanceId) {
+                    if (
+                        this.connection!.instanceId.startsWith('pending:') &&
+                        !window.electron?.sourceSyncConnection
+                    ) {
+                        assertSourceInstance(probe.body);
                         if (
-                            this.connection!.instanceId.startsWith(
-                                'pending:'
-                            ) &&
-                            !window.electron?.sourceSyncConnection
+                            probe.body.instanceId !==
+                            this.connection!.instanceId
                         ) {
                             saveBrowserSourceConnection(
                                 {
@@ -191,7 +198,6 @@ export class SourceSyncService {
                             location.reload();
                             return;
                         }
-                        throw new Error('SOURCE_SYNC.INSTANCE_CHANGED');
                     }
                     verifySourceInstance(probe.body, this.connection, epoch);
                     const response = await this.request({
@@ -203,6 +209,7 @@ export class SourceSyncService {
                     if (response.status === 304) {
                         this.failures = 0;
                         this.nextPollAt = 0;
+                        this.errorKey.set(null);
                         this.state.set('connected');
                         this.lastSync.set(Date.now());
                         if (this.metadataDirty) {
@@ -250,36 +257,30 @@ export class SourceSyncService {
                     this.store!.ready = true;
                     this.failures = 0;
                     this.nextPollAt = 0;
+                    this.errorKey.set(null);
                     this.state.set('connected');
                     this.lastSync.set(Date.now());
                     this.metadataDirty = false;
                     if (changed || !wasReady) this.changes.next();
                 } catch (error) {
                     invalidateSourceVerification();
-                    if (
-                        error instanceof Error &&
-                        error.message === 'SOURCE_SYNC.LOCKED'
-                    )
-                        this.state.set('locked');
+                    const key = error instanceof Error ? error.message : '';
+                    this.state.set(
+                        key === 'SOURCE_SYNC.LOCKED'
+                            ? 'locked'
+                            : key === 'SOURCE_SYNC.CONFLICT'
+                              ? 'conflict'
+                              : 'offline'
+                    );
                     this.nextPollAt =
                         Date.now() +
                         Math.min(120000, 15000 * 2 ** this.failures++);
-                    if (
-                        error instanceof Error &&
-                        error.message.startsWith('SOURCE_SYNC.')
-                    )
-                        this.errorKey.set(error.message);
-                    if (
-                        this.state() !== 'locked' &&
-                        this.state() !== 'conflict'
-                    )
-                        this.state.set('offline');
-                    if (
-                        error instanceof Error &&
-                        error.message === 'SOURCE_SYNC.INSTANCE_CHANGED'
-                    ) {
+                    this.errorKey.set(
+                        key.startsWith('SOURCE_SYNC.') ? key : null
+                    );
+                    if (key === 'SOURCE_SYNC.INSTANCE_CHANGED') {
                         this.snackBar.open(
-                            this.translate.instant(error.message),
+                            this.translate.instant(key),
                             this.translate.instant('CLOSE')
                         );
                     }
@@ -294,10 +295,10 @@ export class SourceSyncService {
     private async request(
         request: SourceServerRequest
     ): Promise<SourceServerResponse> {
+        const mutation = !['instance', 'list', 'get'].includes(
+            request.operation
+        );
         try {
-            const mutation = !['instance', 'list', 'get'].includes(
-                request.operation
-            );
             if (mutation && this.state() !== 'connected') {
                 throw new Error(
                     this.state() === 'locked'
@@ -315,11 +316,13 @@ export class SourceSyncService {
                     (response.body as { code?: string })?.code ===
                         'instance_changed'
                         ? 'INSTANCE_CHANGED'
-                        : response.status === 401
-                          ? 'LOCKED'
-                          : response.status === 412
-                            ? 'CONFLICT'
-                            : 'REQUEST_FAILED';
+                        : response.status >= 500
+                          ? 'OFFLINE'
+                          : response.status === 401
+                            ? 'LOCKED'
+                            : response.status === 412
+                              ? 'CONFLICT'
+                              : 'REQUEST_FAILED';
                 this.state.set(
                     response.status === 401
                         ? 'locked'
@@ -329,7 +332,7 @@ export class SourceSyncService {
                 );
                 throw new Error(`SOURCE_SYNC.${key}`);
             }
-            if (!['instance', 'list', 'get'].includes(request.operation)) {
+            if (mutation) {
                 this.metadataDirty = true;
                 queueMicrotask(() => void this.refresh());
             }
@@ -339,14 +342,14 @@ export class SourceSyncService {
                 error instanceof Error
                     ? error.message.match(/SOURCE_SYNC\.[A-Z_]+/)?.[0]
                     : undefined;
-            if (key === 'SOURCE_SYNC.INSTANCE_CHANGED') {
+            if (key === 'SOURCE_SYNC.INSTANCE_CHANGED')
                 invalidateSourceVerification();
-                this.errorKey.set(key);
-            }
+            if (mutation || key === 'SOURCE_SYNC.INSTANCE_CHANGED')
+                this.errorKey.set(key ?? 'SOURCE_SYNC.REQUEST_FAILED');
             if (key === 'SOURCE_SYNC.LOCKED') this.state.set('locked');
             if (!['locked', 'conflict'].includes(this.state()))
                 this.state.set('offline');
-            if (!['list', 'instance', 'get'].includes(request.operation)) {
+            if (mutation) {
                 const message =
                     error instanceof Error &&
                     error.message.startsWith('SOURCE_SYNC.')

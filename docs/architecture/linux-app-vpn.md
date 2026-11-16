@@ -83,6 +83,19 @@ preload capability hides its controls, its HTTP listener refuses to start, and
 the address API does not advertise namespace-private addresses. Saved remote
 control preferences are preserved for ordinary launches with app VPN off.
 
+The desktop LAN server (**Settings > Server > Server on this computer**,
+`hosted-server.service.ts`) follows the same policy. Inside a protected session
+its status reports `unavailable`, so neither the settings button nor the saved
+autostart can fork the server worker, and no access code is issued. The
+renderer's `supportsHostedServer` capability is false whenever the preload
+reports `appVpnSession`, which hides the section and its local-connection
+shortcut. Inside the namespace the private IPv4 addresses belong to the
+helper's veth and tunnel interfaces, so a "LAN" address offered there would
+not reach the LAN and could expose the library across the namespace boundary
+instead. The saved
+autostart choice and LAN address are left untouched for launches with app VPN
+off.
+
 ## Credentials and persistence
 
 A separate main-owned `linux-vpn.json` under Electron userData stores only the

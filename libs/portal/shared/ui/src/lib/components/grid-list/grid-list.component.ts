@@ -1,12 +1,14 @@
 import {
     ChangeDetectionStrategy,
     Component,
+    ElementRef,
     computed,
     inject,
     input,
     output,
     signal,
 } from '@angular/core';
+import { DatePipe } from '@angular/common';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
 import { MatIcon } from '@angular/material/icon';
@@ -14,7 +16,8 @@ import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatTooltip } from '@angular/material/tooltip';
 import { TranslatePipe } from '@ngx-translate/core';
 import { applyChannelNameStrip } from '@iptvnator/shared/m3u-utils';
-import { readProviderRating } from '@iptvnator/shared/interfaces';
+import { EpgProgram, readProviderRating } from '@iptvnator/shared/interfaces';
+import { getProgramTimeMs } from '@iptvnator/ui/epg';
 import {
     PortalWatchState,
     getXtreamCatchupDays,
@@ -27,6 +30,7 @@ import {
 } from '@iptvnator/ui/components';
 import { CoverTitlesService } from '../../cover-titles/cover-titles.service';
 import { PlaylistErrorViewComponent } from '../playlist-error-view/playlist-error-view.component';
+import { createGridWindow } from './grid-window.controller';
 
 interface GridListItem {
     id?: number | string;
@@ -44,6 +48,8 @@ interface GridListItem {
     rating?: string | number;
     rating_imdb?: string | number;
     progress?: number;
+    epgProgram?: EpgProgram;
+    epgProgress?: number;
     watchState?: PortalWatchState;
     tv_archive?: number | string | null;
     tv_archive_duration?: number | string | null;
@@ -86,190 +92,10 @@ function normalizeArtworkUrl(value: string | undefined): string | undefined {
 
 @Component({
     selector: 'app-grid-list',
-    template: `<div class="grid-list__grid">
-            @if (isLoading()) {
-                @for (row of skeletonRows(); track row) {
-                    <div class="grid-skeleton-card" aria-hidden="true">
-                        <div class="grid-skeleton-thumb">
-                            <span class="grid-skeleton-badge"></span>
-                        </div>
-                        <div class="grid-skeleton-title">
-                            <span
-                                class="grid-skeleton-line grid-skeleton-line--primary"
-                            ></span>
-                            <span
-                                class="grid-skeleton-line grid-skeleton-line--secondary"
-                            ></span>
-                        </div>
-                    </div>
-                }
-            } @else {
-                @for (item of items(); track $index) {
-                    @let i = $any(item);
-                    @let title =
-                        channelTitle(i) || ('PORTALS.UNTITLED' | translate);
-                    <mat-card
-                        [class.grid-card--logo]="variant() === 'logo'"
-                        role="button"
-                        tabindex="0"
-                        [attr.aria-label]="title"
-                        (click)="itemClicked.emit(item)"
-                        (keydown.enter)="itemClicked.emit(item)"
-                        (keydown.space)="onSpaceKey($event, item)"
-                    >
-                        @let poster = resolvePoster(i);
-                        @let artworkMissing = !poster || hasArtworkFailed(poster);
-                        <div class="card-thumbnail-container">
-                            @if (!artworkMissing) {
-                                <img
-                                    class="stream-icon"
-                                    [src]="poster"
-                                    (error)="onImageError($event, poster)"
-                                    loading="lazy"
-                                    [alt]="title"
-                                />
-                            } @else if (
-                                shouldRenderArtworkPlaceholder(poster)
-                            ) {
-                                <div
-                                    class="stream-icon-placeholder"
-                                    aria-hidden="true"
-                                >
-                                    <mat-icon>{{
-                                        getPlaceholderIcon()
-                                    }}</mat-icon>
-                                </div>
-                            } @else {
-                                <img
-                                    class="stream-icon"
-                                    src="./assets/images/default-poster.png"
-                                    loading="lazy"
-                                    [alt]="title"
-                                />
-                            }
-                            @if (postersOnly()) {
-                                <!-- Hover/focus caption for the posters-only
-                                     wall; pinned open when the cover cannot
-                                     identify the item on its own. -->
-                                <div
-                                    class="cover-title-overlay"
-                                    [class.cover-title-overlay--pinned]="
-                                        artworkMissing
-                                    "
-                                    aria-hidden="true"
-                                >
-                                    <span class="cover-title-overlay__text">{{
-                                        title
-                                    }}</span>
-                                </div>
-                            }
-                            @if (i.progress && i.progress > 0) {
-                                <app-progress-capsule [progress]="i.progress" />
-                            }
-                            @if (showCatchupBadge(i)) {
-                                <div
-                                    class="catchup-badge"
-                                    data-test-id="grid-catchup-badge"
-                                    [matTooltip]="
-                                        catchupLabelKey(i)
-                                            | translate
-                                                : { days: catchupDays(i) }
-                                    "
-                                >
-                                    <mat-icon>history</mat-icon>
-                                    <!-- mat-icon is aria-hidden; expose the
-                                         status as text for AT users -->
-                                    <span class="visually-hidden">{{
-                                        catchupLabelKey(i)
-                                            | translate
-                                                : { days: catchupDays(i) }
-                                    }}</span>
-                                </div>
-                            }
-                            @if (i.watchState === 'watched') {
-                                <app-watched-badge
-                                    [isWatched]="true"
-                                    icon="check_circle"
-                                />
-                            } @else if (
-                                i.watchState === 'in-progress' && !i.progress
-                            ) {
-                                <!-- Started with no percent to draw (a series):
-                                     the eye says "touched", the capsule above
-                                     already says it for a movie. -->
-                                <app-watched-badge
-                                    [isWatched]="true"
-                                    icon="remove_red_eye"
-                                />
-                            }
-                        </div>
-                        @let rating = resolveRating(i);
-                        @if (rating) {
-                            <div
-                                class="rating"
-                                [matTooltip]="ratingLabelKey(i) | translate"
-                            >
-                                <mat-icon>star</mat-icon>{{ rating }}
-                            </div>
-                        }
-                        @if (!postersOnly()) {
-                            <mat-card-actions>
-                                <div class="title">{{ title }}</div>
-                            </mat-card-actions>
-                        }
-                    </mat-card>
-                } @empty {
-                    <div class="grid-empty-state">
-                        @if (hasActiveSearch()) {
-                            <app-playlist-error-view
-                                [title]="
-                                    'PORTALS.SEARCH_VIEW.NO_RESULTS_FOR'
-                                        | translate: { term: searchTerm() }
-                                "
-                                [description]="
-                                    'PORTALS.EMPTY_LIST_VIEW.NO_SEARCH_RESULTS'
-                                        | translate
-                                "
-                                [showActionButtons]="false"
-                                [viewType]="'NO_SEARCH_RESULTS'"
-                            />
-                        } @else {
-                            <app-playlist-error-view
-                                [title]="
-                                    'PORTALS.ERROR_VIEW.EMPTY_CATEGORY.TITLE'
-                                        | translate
-                                "
-                                [description]="
-                                    'PORTALS.ERROR_VIEW.EMPTY_CATEGORY.DESCRIPTION'
-                                        | translate
-                                "
-                                [showActionButtons]="false"
-                                [viewType]="'EMPTY_CATEGORY'"
-                            />
-                        }
-                    </div>
-                }
-            }
-        </div>
-        @if (isAppending()) {
-            <div class="grid-list__tail" aria-live="polite">
-                <mat-spinner diameter="28" />
-                <span>{{ 'PORTALS.GRID.LOADING_MORE' | translate }}</span>
-            </div>
-        } @else if (appendError()) {
-            <div class="grid-list__tail grid-list__tail--error" role="alert">
-                <span>{{ 'PORTALS.GRID.LOAD_MORE_FAILED' | translate }}</span>
-                <button
-                    type="button"
-                    mat-flat-button
-                    (click)="retryLoadMore.emit()"
-                >
-                    {{ 'PORTALS.GRID.RETRY' | translate }}
-                </button>
-            </div>
-        }`,
+    templateUrl: './grid-list.component.html',
     styleUrl: './grid-list.component.scss',
     imports: [
+        DatePipe,
         TranslatePipe,
         PlaylistErrorViewComponent,
         MatButtonModule,
@@ -280,16 +106,30 @@ function normalizeArtworkUrl(value: string | undefined): string | undefined {
         ProgressCapsuleComponent,
         WatchedBadgeComponent,
     ],
-    host: { '[class.grid-list--posters-only]': 'postersOnly()' },
+    host: {
+        '[class.grid-list--posters-only]': 'postersOnly()',
+        '[class.grid-list--windowed]': 'gridWindow.enabled',
+        '[class.grid-list--logos]': "variant() === 'logo'",
+        '[attr.aria-busy]': 'isLoading()',
+    },
     changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class GridListComponent {
+    private readonly host: HTMLElement = inject(ElementRef).nativeElement;
     private readonly failedArtworkUrls = signal<ReadonlySet<string>>(new Set());
     private readonly settingsStore = inject(SettingsStore);
     private readonly coverTitles = inject(CoverTitlesService);
 
+    readonly refinementActive = input(false);
+    readonly sourceHasMore = input(false);
+    readonly loadMorePaused = input(false);
+    readonly continueLoading = output<void>();
+    readonly clearRefinement = output<void>();
     readonly items = input<GridListItem[]>([]);
     readonly isLoading = input<boolean>(false);
+    readonly showEpg = input(false);
+    readonly epgLoading = input(false);
+    readonly activateOnDoubleClick = input(false);
     /** True while an infinite-scroll append is in flight (tail spinner). */
     readonly isAppending = input<boolean>(false);
     /** True when the latest append failed; renders the retry tail. */
@@ -297,9 +137,21 @@ export class GridListComponent {
     readonly searchTerm = input<string>('');
     readonly itemClicked = output<GridListItem>();
     readonly retryLoadMore = output<void>();
+    /** TV shell only: renders the rows around the viewport, see grid-window.ts. */
+    protected readonly gridWindow = createGridWindow(
+        this.items,
+        this.isLoading
+    );
 
     readonly variant = input<'poster' | 'logo'>('poster');
     readonly type = input<'vod' | 'series' | 'live' | string>('');
+    programDisplayMs(value: string, timestamp?: number | null): number {
+        return getProgramTimeMs(
+            value,
+            timestamp,
+            this.settingsStore.resolvedEpgOffsetMinutes()
+        );
+    }
     protected readonly resolveRating = resolveGridRating;
     protected readonly ratingLabelKey = (item: GridListItem): string =>
         formatGridRating(item.rating_imdb)
@@ -356,6 +208,11 @@ export class GridListComponent {
         Array.from({ length: 12 }, (_, index) => index)
     );
 
+    restoreScrollPosition(top: number): void {
+        this.host.scrollTo({ top });
+        this.gridWindow.synchronize();
+    }
+
     protected hasArtworkFailed(poster: string): boolean {
         return this.failedArtworkUrls().has(poster);
     }
@@ -378,6 +235,15 @@ export class GridListComponent {
             default:
                 return 'movie';
         }
+    }
+
+    protected onItemClick(item: GridListItem, event: MouseEvent): void {
+        if (!this.activateOnDoubleClick() || event.detail === 0)
+            this.itemClicked.emit(item);
+    }
+
+    protected onItemDoubleClick(item: GridListItem): void {
+        if (this.activateOnDoubleClick()) this.itemClicked.emit(item);
     }
 
     /** Space activates like a click but must not scroll the grid. */

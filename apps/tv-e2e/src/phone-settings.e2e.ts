@@ -1,11 +1,11 @@
 import { expect, test } from '@playwright/test';
-import { backend, nav, start } from './helpers';
+import { fillTvField, chooseTv, backend, nav, start } from './helpers';
 test('phone settings require TV confirmation, preserve the saved key on blank replacement and survive reload', async ({
     page,
     browser,
 }) => {
     await start(page);
-    await page.getByLabel('IPTVnator backend URL').fill(backend);
+    await fillTvField(page.getByLabel('IPTVnator backend URL'), backend);
     await page.getByRole('button', { name: 'Check and connect' }).click();
     await expect(page.locator('.connection-status')).toHaveText('Connected');
     await nav(page, 'Settings');
@@ -67,13 +67,17 @@ test('phone settings require TV confirmation, preserve the saved key on blank re
             await expect(
                 page.getByLabel('TMDB API key or read access token')
             ).toHaveValue('phone-test-key');
-            await expect(page.getByLabel('Home composition')).toHaveValue(
+            await expect(page.getByLabel('Home composition')).toHaveAttribute(
+                'data-value',
                 'shelf'
             );
         }
         await page.reload();
         await nav(page, 'Settings');
-        await expect(page.getByLabel('Metadata language')).toHaveValue('de');
+        await expect(page.getByLabel('Metadata language')).toHaveAttribute(
+            'data-value',
+            'de'
+        );
         await expect(
             page.getByLabel('TMDB API key or read access token')
         ).toHaveValue('phone-test-key');
@@ -87,27 +91,32 @@ test('explicit unchanged phone settings replace local preference drafts only aft
     browser,
 }) => {
     await start(page);
-    await page.getByLabel('IPTVnator backend URL').fill(backend);
+    await fillTvField(page.getByLabel('IPTVnator backend URL'), backend);
     await page.getByRole('button', { name: 'Check and connect' }).click();
     await expect(page.locator('.connection-status')).toHaveText('Connected');
     await nav(page, 'Settings');
     await page.getByRole('tab', { name: 'Library', exact: false }).click();
-    await page.getByLabel('Library server URL').fill('http://draft.invalid');
-    await page
-        .getByLabel('Library access token (if required)')
-        .fill('library-draft-fixture');
+    await fillTvField(
+        page.getByLabel('Library server URL'),
+        'http://draft.invalid'
+    );
+    await fillTvField(
+        page.getByLabel('Library access token (if required)'),
+        'library-draft-fixture'
+    );
     await page.getByRole('tab', { name: 'Appearance', exact: false }).click();
-    await page.getByLabel('Home composition').selectOption('shelf');
+    await chooseTv(page, 'Home composition', 'shelf');
     await page
         .getByRole('tab', { name: 'Programme guide', exact: false })
         .click();
     await page.getByLabel('Show provider programme guide').uncheck();
     await page.getByRole('tab', { name: 'Metadata', exact: false }).click();
     await page.getByLabel('Use TMDB metadata').check();
-    await page
-        .getByLabel('TMDB API key or read access token')
-        .fill('unsaved-key-fixture');
-    await page.getByLabel('Metadata language').selectOption('de');
+    await fillTvField(
+        page.getByLabel('TMDB API key or read access token'),
+        'unsaved-key-fixture'
+    );
+    await chooseTv(page, 'Metadata language', 'de');
     const response = page.waitForResponse(
         (r) =>
             r.url() === `${backend}/tv/pairing` &&
@@ -149,13 +158,19 @@ test('explicit unchanged phone settings replace local preference drafts only aft
         await expect(page.locator('.phone-setup [role=alert]')).toContainText(
             'not saved'
         );
-        await expect(page.getByLabel('Home composition')).toHaveValue('shelf');
+        await expect(page.getByLabel('Home composition')).toHaveAttribute(
+            'data-value',
+            'shelf'
+        );
         await expect(
             page.getByLabel('TMDB API key or read access token')
         ).toHaveValue('unsaved-key-fixture');
         await apply.click();
         await expect(phone.getByRole('status')).toContainText('Settings saved');
-        await expect(page.getByLabel('Home composition')).toHaveValue('cinema');
+        await expect(page.getByLabel('Home composition')).toHaveAttribute(
+            'data-value',
+            'cinema'
+        );
         await expect(
             page.getByLabel('Show provider programme guide')
         ).toBeChecked();
@@ -163,7 +178,10 @@ test('explicit unchanged phone settings replace local preference drafts only aft
         await expect(
             page.getByLabel('TMDB API key or read access token')
         ).toHaveValue('');
-        await expect(page.getByLabel('Metadata language')).toHaveValue('en');
+        await expect(page.getByLabel('Metadata language')).toHaveAttribute(
+            'data-value',
+            'en'
+        );
         await expect(page.getByLabel('Library server URL')).toHaveValue(
             'http://draft.invalid'
         );

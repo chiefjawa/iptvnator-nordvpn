@@ -1,3 +1,8 @@
+import { SecondStreamFloatingDirective } from '../second-stream/second-stream-floating.directive';
+import { SecondStreamComponent } from '../second-stream/second-stream.component';
+import { WebPlayerActivity } from './web-player-activity';
+import { TranslatePipe } from '@ngx-translate/core';
+import { PLAYBACK_ACTIVITY_EVENTS } from '@iptvnator/services/activity-events';
 import {
     Component,
     ElementRef,
@@ -19,7 +24,6 @@ import {
     type PlaybackDiagnostic,
     type PlaybackDiagnosticCode,
     type PlaybackFallbackRequest,
-    type PlaybackRecommendationTarget,
 } from '@iptvnator/playback/util';
 import { PORTAL_EXTERNAL_PLAYBACK } from '@iptvnator/portal/shared/util';
 import { RuntimeCapabilitiesService, SettingsStore } from '@iptvnator/services';
@@ -57,7 +61,7 @@ import {
 import { WebPlayerApplicationHandoffCoordinator } from './web-player-application-handoff';
 import {
     ownsPlaybackApplication,
-    type PlaybackApplicationOwnership,
+    type PlaybackApplicationOwnership as PlaybackOwnership,
 } from './web-player-application-ownership';
 import { createWebPlayerApplicationState } from './web-player-application-state';
 import { resolveWebPlayerMediaTitle } from './web-player-playback-state';
@@ -78,6 +82,9 @@ import { resolveWebPlayerSharedControls } from './web-player-shared-controls';
     styleUrls: ['./web-player-view.component.scss'],
     host: { class: 'web-player-view' },
     imports: [
+        SecondStreamComponent,
+        SecondStreamFloatingDirective,
+        TranslatePipe,
         ArtPlayerComponent,
         EmbeddedMpvPlayerComponent,
         FullscreenChannelPanelComponent,
@@ -115,7 +122,7 @@ export class WebPlayerViewComponent implements OnDestroy {
         () => this.renderedApplications().some((app) => app.embeddedMpv),
         () => this.embeddedMpvPlayer()?.support() ?? null
     );
-    private readonly runtime = inject(RuntimeCapabilitiesService);
+    protected readonly runtime = inject(RuntimeCapabilitiesService);
     private readonly settingsStore = inject(SettingsStore);
     private readonly externalPlayback = inject(PORTAL_EXTERNAL_PLAYBACK, {
         optional: true,
@@ -157,20 +164,19 @@ export class WebPlayerViewComponent implements OnDestroy {
     /** Channel/EPG snapshot for the embedded-MPV recording tracker. */
     readonly recordingMetadata = input<RecordingStartMetadata | null>(null);
 
-    readonly timeUpdate = output<{
-        currentTime: number;
-        duration: number;
-    }>();
+    readonly timeUpdate = output<PlayerTimeUpdate>();
     readonly externalFallbackRequested = output<PlaybackFallbackRequest>();
     readonly alternativeSourceRequested = output<string>();
     readonly sourceCheckRequested = output<string>();
     readonly playbackFailed = output<PlaybackDiagnosticCode>();
+    readonly playbackStarted = output<ResolvedPortalPlayback>();
     readonly playbackEnded = output<void>();
     readonly previousEpisodeRequested = output<void>();
     readonly nextEpisodeRequested = output<void>();
     /** Re-emitted embedded-MPV clean recording stop (stop enrichment). */
     readonly recordingStopped = output<RecordingStoppedEvent>();
 
+    readonly embeddedMpvLiveSubtitlesOff = signal(false);
     readonly showCaptions = computed(
         () => this.settingsStore.showCaptions?.() ?? false
     );
@@ -255,6 +261,7 @@ export class WebPlayerViewComponent implements OnDestroy {
         selectedPlayer: this.selectedPlayer,
         reloadToken: this.reloadToken,
         playbackApplicationToken: this.playbackApplicationToken,
+        embeddedSession: () => this.embeddedMpvPlayer()?.session(),
         resolvedPlayback: this.resolvedPlayback,
         resolvedIsLive: this.resolvedIsLive,
         playbackExternallyTransferable: this.playbackExternallyTransferable,
@@ -267,6 +274,7 @@ export class WebPlayerViewComponent implements OnDestroy {
             this.externalFallbackRequested.emit(request),
     });
     readonly playbackDiagnostic = this.recovery.playbackDiagnostic;
+    readonly hasStartedPlayback = this.recovery.hasStartedPlayback;
     readonly visiblePlaybackDiagnostic =
         this.recovery.visiblePlaybackDiagnostic;
     readonly recommendations = this.recovery.recommendations;
@@ -285,32 +293,32 @@ export class WebPlayerViewComponent implements OnDestroy {
     readonly recordingFolder = computed(
         () => this.settingsStore.recordingFolder?.() ?? ''
     );
-    get supportsManagedExternalPlayers(): boolean {
-        return this.runtime.supportsManagedExternalPlayers;
-    }
-    readonly renderedApplications = computed<
-        readonly PlaybackApplicationOwnership[]
-    >(() => {
-        if (this.liveAutoFormat.pending()) return [];
-        const binding = this.activeBinding();
-        const embeddedMpv =
-            this.selectedPlayer() === VideoPlayer.EmbeddedMpv && !binding;
-        if (!binding && !embeddedMpv) {
-            return [];
-        }
+    readonly renderedApplications = computed<readonly PlaybackOwnership[]>(
+        () => {
+            if (this.liveAutoFormat.pending()) return [];
+            const binding = this.activeBinding();
+            const embeddedMpv =
+                this.selectedPlayer() === VideoPlayer.EmbeddedMpv && !binding;
+            if (!binding && !embeddedMpv) return [];
 
-        return [
-            Object.freeze({
-                binding,
-                embeddedMpv,
-                isLive: this.resolvedIsLive(),
-                sourceRevision: this.playbackSourceRevisionToken(),
-                token: this.playbackApplicationToken(),
-            }),
-        ];
-    });
+            return [
+                Object.freeze({
+                    binding,
+                    embeddedMpv,
+                    isLive: this.resolvedIsLive(),
+                    sourceRevision: this.playbackSourceRevisionToken(),
+                    token: this.playbackApplicationToken(),
+                }),
+            ];
+        }
+    );
+
+    private readonly activity = new WebPlayerActivity(
+        inject(PLAYBACK_ACTIVITY_EVENTS, { optional: true })
+    );
 
     constructor() {
+        effect(() => this.activity.begin(this.playback()));
         effect(() => {
             const session = this.externalPlayback?.activeSession() ?? null;
             untracked(() => this.externalRecovery.observe(session));
@@ -358,6 +366,7 @@ export class WebPlayerViewComponent implements OnDestroy {
     }
 
     ngOnDestroy(): void {
+        this.activity.flush();
         this.liveAutoFormat.destroy();
         this.externalRecovery.destroy();
         this.applicationHandoff.destroy();
@@ -372,60 +381,75 @@ export class WebPlayerViewComponent implements OnDestroy {
 
     handlePlaybackStarted(binding: PlaybackBinding): void {
         this.recovery.syncSession();
-        if (
-            this.applicationHandoff.owns(
-                binding,
-                this.playbackApplicationToken()
-            ) &&
-            !this.liveAutoFormat.pending()
-        )
+        if (this.ownsBinding(binding) && !this.liveAutoFormat.pending())
             this.liveAutoFormat.started();
     }
 
     handleTimeUpdate(
         event: PlayerTimeUpdate,
-        ownership: PlaybackApplicationOwnership
+        ownership: PlaybackOwnership
     ): void {
-        if (
-            !ownsPlaybackApplication({
-                ownership,
-                currentToken: this.playbackApplicationToken(),
-                currentSourceRevision: this.playbackSourceRevisionToken(),
-                bindingOwned: ownership.binding
-                    ? this.applicationHandoff.owns(
-                          ownership.binding,
-                          ownership.token
-                      )
-                    : false,
-                embeddedMpvSelected:
-                    this.selectedPlayer() === VideoPlayer.EmbeddedMpv,
-            })
-        ) {
-            return;
-        }
+        if (!this.ownsApplication(ownership)) return;
 
+        if (this.recovery.recordTimeUpdate(ownership.token, event.playing))
+            this.playbackStarted.emit(
+                this.playback() ?? this.resolvedPlayback()
+            );
+        if (!ownership.isLive && !this.activity.record(this.playback(), event))
+            return;
         this.recoverySession.recordTimeUpdate(event, ownership.isLive);
         this.historyConfirmation.record(event.currentTime, event.playing);
         this.timeUpdate.emit(event);
     }
 
-    requestRecommendedPlayer(target: PlaybackRecommendationTarget): void {
-        this.recovery.requestRecommendedPlayer(target);
+    handleActivityEnded(ownership: PlaybackOwnership, notify = true): void {
+        if (!this.ownsApplication(ownership)) return;
+        if (!ownership.isLive) this.activity.finish();
+        this.recovery.recordEnd(ownership.token);
+        if (notify) this.playbackEnded.emit();
     }
+
+    private ownsApplication(ownership: PlaybackOwnership): boolean {
+        return ownsPlaybackApplication({
+            ownership,
+            currentToken: this.playbackApplicationToken(),
+            currentSourceRevision: this.playbackSourceRevisionToken(),
+            bindingOwned: this.ownsBinding(ownership.binding, ownership.token),
+            embeddedMpvSelected:
+                this.selectedPlayer() === VideoPlayer.EmbeddedMpv,
+        });
+    }
+
+    private ownsBinding(
+        binding: PlaybackBinding | null,
+        token = this.playbackApplicationToken()
+    ): boolean {
+        return !!binding && this.applicationHandoff.owns(binding, token);
+    }
+
+    readonly requestRecommendedPlayer =
+        this.recovery.requestRecommendedPlayer.bind(this.recovery);
 
     retryPlayback(binding?: PlaybackBinding): void {
         this.recovery.syncSession();
-        if (
-            binding &&
-            !this.applicationHandoff.owns(
-                binding,
-                this.playbackApplicationToken()
-            )
-        )
-            return;
+        if (binding && !this.ownsBinding(binding)) return;
         // A current engine can remain buffering after an earlier manual retry.
         // Its wait notice is a fresh user action, not a duplicate old callback.
         if (binding) this.recoverySession.settle(binding);
         this.recovery.retryPlayback();
+    }
+
+    retryFailedPlayback(): boolean {
+        const mpv = this.embeddedMpvPlayer();
+        if (!mpv && this.recovery.canRetry()) this.retryPlayback();
+        else if (
+            mpv &&
+            !mpv.isReconnecting() &&
+            (mpv.isErrored() || mpv.isLiveEnded())
+        ) {
+            this.recovery.recordEnd(this.playbackApplicationToken());
+            mpv.retry();
+        } else return false;
+        return true;
     }
 }

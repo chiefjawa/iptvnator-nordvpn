@@ -3,6 +3,9 @@
         [formGroup]="settingsForm"
         (ngSubmit)="onSubmit()"
         class="settings-layout"
+        [class.settings-layout--server]="
+            activeSection() === 'server' && !search.isSearching()
+        "
         novalidate
     >
         @if (!libraryReady()) {
@@ -62,6 +65,21 @@
                 />
             } @else {
                 @switch (activeSection()) {
+                    @case ('appearance') {
+                        <app-settings-appearance-section
+                            [form]="settingsForm"
+                            [themeOptions]="themeOptions"
+                            [coverSizeOptions]="coverSizeOptions"
+                            (selectTheme)="form.selectTheme($event)"
+                            (selectSystemTheme)="
+                                form.selectSystemTheme($event.mode, $event.theme)
+                            "
+                            (selectThemeAccent)="
+                                form.selectThemeAccent($event)
+                            "
+                            (selectCoverSize)="form.selectCoverSize($event)"
+                        />
+                    }
                     @case ('playback') {
                         <app-settings-playback-section
                             [form]="settingsForm"
@@ -114,7 +132,10 @@
                         />
                     }
                     @case ('tmdb') {
-                        <app-settings-tmdb-section [form]="settingsForm" />
+                        <app-settings-tmdb-section
+                            [form]="settingsForm"
+                            (transferSaved)="form.applyTransferredTmdbKey()"
+                        />
                     }
                     @case ('parental') {
                         <app-settings-parental-lock-section
@@ -146,6 +167,7 @@
                                 playlistReset.isRemovingAllPlaylists()
                             "
                             [isExportingData]="backup.isExportingData()"
+                            [supportsExport]="backup.supportsExport"
                             [isImportingData]="backup.isImportingData()"
                             [isBackupBusy]="backup.isBusy()"
                             [importSummary]="backup.importSummary()"
@@ -190,8 +212,6 @@
                         <app-settings-general-section
                             [form]="settingsForm"
                             [languageEnum]="languageEnum"
-                            [themeOptions]="themeOptions"
-                            [coverSizeOptions]="coverSizeOptions"
                             [startupBehaviorOptions]="startupBehaviorOptions"
                             [startupWindowModeOptions]="
                                 startupWindowModeOptions
@@ -202,8 +222,6 @@
                             [supportsStartupWindowMode]="
                                 supportsStartupWindowMode
                             "
-                            (selectTheme)="form.selectTheme($event)"
-                            (selectCoverSize)="form.selectCoverSize($event)"
                         />
                     }
                 }

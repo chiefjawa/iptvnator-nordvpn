@@ -5,7 +5,11 @@ import { MatSnackBar } from '@angular/material/snack-bar';
 import { NoopAnimationsModule } from '@angular/platform-browser/animations';
 import { Store } from '@ngrx/store';
 import { TranslateModule } from '@ngx-translate/core';
-import { DataService, RuntimeCapabilitiesService } from '@iptvnator/services';
+import {
+    DataService,
+    EpgPreferencesService,
+    RuntimeCapabilitiesService,
+} from '@iptvnator/services';
 import { StalkerPortalDiscoveryService } from '@iptvnator/portal/stalker/data-access';
 import { AddPlaylistDialogComponent } from './add-playlist-dialog.component';
 
@@ -68,6 +72,50 @@ describe('AddPlaylistDialogComponent with the real URL form', () => {
         (fixture.nativeElement as HTMLElement).querySelector<HTMLInputElement>(
             'input[formcontrolname="playlistUrl"]'
         );
+
+    it('hides the M3U EPG choice during global opt-out without resetting it', async () => {
+        const checkbox = () =>
+            (fixture.nativeElement as HTMLElement).querySelector(
+                '[data-test-id="m3u-import-epg"]'
+            );
+        const preferences = TestBed.inject(EpgPreferencesService);
+        expect(checkbox()).not.toBeNull();
+        await preferences.apply(false);
+        await settle();
+        expect(checkbox()).toBeNull();
+        expect(fixture.componentInstance.autoImportEpg()).toBe(true);
+        await preferences.apply(true);
+        await settle();
+        expect(checkbox()).not.toBeNull();
+        expect(fixture.componentInstance.autoImportEpg()).toBe(true);
+    });
+
+    it('keeps the M3U EPG choice while switching methods and hides it for portals', async () => {
+        const component = fixture.componentInstance;
+        const checkbox = () =>
+            (
+                fixture.nativeElement as HTMLElement
+            ).querySelector<HTMLInputElement>(
+                '[data-test-id="m3u-import-epg"] input'
+            );
+        expect(checkbox()?.checked).toBe(true);
+        component.autoImportEpg.set(false);
+        component.selectMethod('xtream');
+        await settle();
+        expect(checkbox()).toBeNull();
+        component.selectMethod('url');
+        await settle();
+        expect(checkbox()?.checked).toBe(false);
+        component.selectMethod('file');
+        await settle();
+        expect(component.fileUpload()?.autoImportEpg()).toBe(false);
+        component.selectMethod('text');
+        await settle();
+        expect(checkbox()?.checked).toBe(false);
+        component.clearCurrentForm();
+        await settle();
+        expect(checkbox()?.checked).toBe(true);
+    });
 
     it('keeps provider and URL drafts in the dialog and resets only the cleared method', async () => {
         const component = fixture.componentInstance;
@@ -166,6 +214,73 @@ describe('AddPlaylistDialogComponent with the real URL form', () => {
             ?.form.patchValue({ playlistUrl: 'https://example.com/list.m3u' });
         await settle();
 
+        expect(addButton()?.disabled).toBe(false);
+    });
+
+    it('offers an optional Xtream handoff and preserves the URL draft on return', async () => {
+        const draft = {
+            playlistUrl:
+                'https://panel.example:8443/base/get.php?username=alice&password=p%26ss&type=m3u_plus',
+            playlistName: 'My provider',
+            userAgent: 'VLC/3.0.21',
+        };
+        const root = fixture.nativeElement as HTMLElement;
+        fixture.componentInstance.urlUpload()?.form.setValue(draft);
+        await settle();
+        const suggestion = root.querySelector<HTMLElement>(
+            '[data-test-id="xtream-url-suggestion"]'
+        );
+        expect(suggestion).not.toBeNull();
+        expect(addButton()?.disabled).toBe(false);
+        suggestion?.querySelector('button')?.click();
+        await settle();
+
+        expect(fixture.componentInstance.method()).toBe('xtream');
+        expect(
+            fixture.componentInstance.xtreamImport()?.form.getRawValue()
+        ).toMatchObject({
+            title: 'My provider',
+            serverUrl: 'https://panel.example:8443/base',
+            username: 'alice',
+            password: 'p&ss',
+            userAgent: 'VLC/3.0.21',
+        });
+        expect(
+            root.querySelector<HTMLDetailsElement>(
+                '[data-test-id="xtream-advanced-settings"]'
+            )?.open
+        ).toBe(true);
+        expect(root.querySelector('app-url-upload')).toBeNull();
+        fixture.componentInstance.backToM3u();
+        await settle();
+        expect(
+            fixture.componentInstance.urlUpload()?.form.getRawValue()
+        ).toEqual(draft);
+        expect(
+            root.querySelector<HTMLDetailsElement>(
+                '[data-test-id="url-advanced-settings"]'
+            )?.open
+        ).toBe(true);
+        expect(root.querySelector('app-url-upload')).not.toBeNull();
+
+        fixture.componentInstance.urlUpload()?.clearForm();
+        await settle();
+        expect(
+            root.querySelector('[data-test-id="xtream-url-suggestion"]')
+        ).toBeNull();
+        expect(addButton()?.disabled).toBe(true);
+    });
+
+    it('leaves regular M3U links available without a suggestion', async () => {
+        fixture.componentInstance
+            .urlUpload()
+            ?.form.patchValue({ playlistUrl: 'https://example.com/list.m3u' });
+        await settle();
+        expect(
+            (fixture.nativeElement as HTMLElement).querySelector(
+                '[data-test-id="xtream-url-suggestion"]'
+            )
+        ).toBeNull();
         expect(addButton()?.disabled).toBe(false);
     });
 });

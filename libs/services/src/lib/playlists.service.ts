@@ -1,4 +1,12 @@
 import {
+    HISTORY_PLAYLIST_BRIDGE,
+    type HistoryPlaylistAction,
+} from '../history-events';
+import {
+    FAVORITES_PLAYLIST_BRIDGE,
+    mutateFavoritePlaylist,
+} from '../favorites-events';
+import {
     DatabaseService,
     type DbOperationOptions,
 } from './database-electron.service';
@@ -7,8 +15,6 @@ import { inject, Injectable } from '@angular/core';
 import { LazySnackBar } from './lazy-snack-bar/lazy-snack-bar';
 import { TranslateService } from '@ngx-translate/core';
 import {
-    aggregateFavoriteChannels,
-    createFavoritesPlaylist,
     createPlaylistObject,
     resolvePlaylistEpgSourceState,
 } from '@iptvnator/shared/m3u-utils';
@@ -25,18 +31,16 @@ import {
     tap,
 } from 'rxjs';
 import {
-    Channel,
     DbStores,
-    extractStalkerItemId,
     isM3uRecentlyViewedItem,
     M3uFavoriteChannel,
     M3uRecentlyViewedItem,
     Playlist,
     PlaylistMetaUpdate,
     PlaylistRecentlyViewedItem,
+    PlaylistRecentIdentity,
     PlaylistUpdateState,
     StalkerPortalItem,
-    normalizeStalkerDate,
     withExplicitStalkerPortalFlag,
 } from '@iptvnator/shared/interfaces';
 import { PLAYLIST_DELETE_CLEANUP } from './playlist-delete-cleanup.token';
@@ -55,11 +59,7 @@ const SQLITE_PLAYLIST_MIGRATION_FLAG = 'm3u-playlists-indexeddb-to-sqlite-v1';
 const STALKER_PLAYLIST_METADATA_MIGRATION_FLAG =
     'm3u-playlists-stalker-metadata-v1';
 
-type PortalFavoriteItem = StalkerPortalItem & {
-    category_id?: string;
-    raw?: string;
-    [key: string]: unknown;
-};
+import type { PortalFavoriteItem } from './playlist-favorites';
 
 type PlaylistRawItem = {
     raw?: string;
@@ -85,6 +85,8 @@ export function resolvePlaylistParser(parserModule: PlaylistParserModule) {
     providedIn: 'root',
 })
 export class PlaylistsService {
+    private readonly historySync = inject(HISTORY_PLAYLIST_BRIDGE);
+    private readonly favoriteSync = inject(FAVORITES_PLAYLIST_BRIDGE);
     private readonly healthEvidence = inject(SourceHealthEvidenceService, {
         optional: true,
     });
@@ -220,7 +222,7 @@ export class PlaylistsService {
             url: playlist.url,
             filePath: playlist.filePath,
             epgUrls: playlist.epgUrls ?? [],
-            detectedEpgUrls: playlist.detectedEpgUrls ?? playlist.epgUrls ?? [],
+            detectedEpgUrls: playlist.detectedEpgUrls ?? [],
             manualEpgUrls: playlist.manualEpgUrls ?? [],
             disabledEpgUrls: playlist.disabledEpgUrls ?? [],
             userAgent: playlist.userAgent,
@@ -230,6 +232,7 @@ export class PlaylistsService {
             updateState: playlist.updateState,
             position: playlist.position,
             serverUrl: playlist.serverUrl,
+            xtreamContentTypes: playlist.xtreamContentTypes,
             username: playlist.username,
             password: playlist.password,
             macAddress: playlist.macAddress,
@@ -509,11 +512,35 @@ export class PlaylistsService {
         });
     }
 
+    private projectFavoriteMetas(rows: Playlist[]) {
+        return Promise.all(
+            rows.map(async (row) => {
+                const projected = await this.historySync.project(
+                    await this.favoriteSync.project(row)
+                );
+                return projected.recentlyViewed?.length
+                    ? this.prepareHistory(projected)
+                    : projected;
+            })
+        );
+    }
+
+    private async prepareHistory(playlist: Playlist): Promise<Playlist> {
+        if (playlist && (!playlist.serverUrl || playlist.macAddress))
+            await import('./playlist-history');
+        return playlist;
+    }
+
     getAllPlaylists() {
         if (this.usesDocumentStore) {
             const shared = this.startupMetas;
             // A joining caller gets its own copy of the shared result.
-            if (shared) return from(shared.then((p) => structuredClone(p)));
+            if (shared)
+                return from(
+                    shared.then((p) =>
+                        this.projectFavoriteMetas(structuredClone(p))
+                    )
+                );
             const read = firstValueFrom(
                 this.runOnSqlite(async () => {
                     const store = this.documentStore;
@@ -531,13 +558,17 @@ export class PlaylistsService {
                 const end = () => (this.startupMetas = null);
                 read.then(end, end);
             }
-            return from(read);
+            return from(read.then((rows) => this.projectFavoriteMetas(rows)));
         }
 
         return this.runOnIndexedDb(() =>
             firstValueFrom(this.dbService.getAll<Playlist>(DbStores.Playlists))
         ).pipe(
-            map((data) => data.map((playlist) => this.toPlaylistMeta(playlist)))
+            switchMap((data) =>
+                this.projectFavoriteMetas(
+                    data.map((playlist) => this.toPlaylistMeta(playlist))
+                )
+            )
         );
     }
 
@@ -576,7 +607,11 @@ export class PlaylistsService {
         // channels with the previous persisted snapshot. Join the same queue;
         // mutation-internal reads keep using getPlaylistById to avoid re-entry.
         return this.serializePlaylistWrite(id, () =>
-            firstValueFrom(this.getPlaylistById(id))
+            firstValueFrom(this.getPlaylistById(id)).then((playlist) =>
+                this.favoriteSync
+                    .project(playlist)
+                    .then((row) => this.historySync.project(row))
+            )
         );
     }
 
@@ -681,6 +716,16 @@ export class PlaylistsService {
         operationId?: string
     ) {
         return this.serializePlaylistWrite(playlistId, async () => {
+            if (!this.usesDocumentStore) {
+                await this.ensureIndexedDbPlaylistMigrations();
+                const { persistIndexedDbPlaylistRefresh } =
+                    await import('./playlist-refresh-merge');
+                return persistIndexedDbPlaylistRefresh(
+                    playlistId,
+                    updatedPlaylist
+                );
+            }
+
             const currentPlaylist = await firstValueFrom(
                 this.getPlaylistById(playlistId, operationId)
             );
@@ -691,13 +736,10 @@ export class PlaylistsService {
                 playlistId
             );
 
-            const saved = await this.persistPlaylistMutation(
+            return (await this.persistPlaylistMutation(
                 mergedPlaylist,
                 operationId
-            );
-            return (
-                this.usesDocumentStore ? saved : mergedPlaylist
-            ) as Playlist;
+            )) as Playlist;
         });
     }
 
@@ -712,9 +754,13 @@ export class PlaylistsService {
                             ? await store.dbGetAppPlaylist(id)
                             : await store.dbGetAppPlaylist(id, operationId);
                 }
-                return playlist
-                    ? this.createSqliteFallbackPlaylist(playlist as Playlist)
-                    : (undefined as unknown as Playlist);
+                return this.prepareHistory(
+                    playlist
+                        ? this.createSqliteFallbackPlaylist(
+                              playlist as Playlist
+                          )
+                        : (undefined as unknown as Playlist)
+                );
             });
         }
 
@@ -722,7 +768,7 @@ export class PlaylistsService {
             firstValueFrom(
                 this.dbService.getByID<Playlist>(DbStores.Playlists, id)
             )
-        );
+        ).pipe(switchMap((playlist) => this.prepareHistory(playlist)));
     }
 
     updatePlaylistMeta(updatedPlaylist: PlaylistMetaUpdate) {
@@ -777,6 +823,7 @@ export class PlaylistsService {
         updatedPlaylist: PlaylistMetaUpdate
     ): Playlist {
         const epgSourceState = resolvePlaylistEpgSourceState({
+            autoImportEpg: playlist.autoImportEpg,
             detectedEpgUrls:
                 updatedPlaylist.detectedEpgUrls ?? playlist.detectedEpgUrls,
             enabledEpgUrls: updatedPlaylist.epgUrls ?? playlist.epgUrls,
@@ -799,6 +846,12 @@ export class PlaylistsService {
             ...(updatedPlaylist.autoRefresh != null
                 ? { autoRefresh: updatedPlaylist.autoRefresh }
                 : {}),
+            ...(updatedPlaylist.url != null
+                ? { url: updatedPlaylist.url }
+                : {}),
+            ...(updatedPlaylist.filePath != null
+                ? { filePath: updatedPlaylist.filePath }
+                : {}),
             ...(updatedPlaylist.userAgent != null
                 ? { userAgent: updatedPlaylist.userAgent }
                 : {}),
@@ -810,6 +863,9 @@ export class PlaylistsService {
                 : {}),
             ...(updatedPlaylist.serverUrl != null
                 ? { serverUrl: updatedPlaylist.serverUrl }
+                : {}),
+            ...(updatedPlaylist.xtreamContentTypes !== undefined
+                ? { xtreamContentTypes: updatedPlaylist.xtreamContentTypes }
                 : {}),
             ...(updatedPlaylist.portalUrl != null
                 ? { portalUrl: updatedPlaylist.portalUrl }
@@ -947,52 +1003,31 @@ export class PlaylistsService {
         });
     }
 
-    updateFavorites(id: string, favorites: string[]) {
+    private favoriteMutation(
+        id: string,
+        transform: (
+            current: NonNullable<Playlist['favorites']>
+        ) => NonNullable<Playlist['favorites']>
+    ): Observable<Playlist> {
         return this.serializePlaylistWrite(id, async () => {
-            const playlist = await firstValueFrom(this.getPlaylistById(id));
-
-            return this.persistPlaylistMutation({
-                ...playlist,
-                favorites,
-            });
+            return mutateFavoritePlaylist(
+                await firstValueFrom(this.getPlaylistById(id)),
+                transform,
+                this.favoriteSync,
+                (row) => this.persistPlaylistMutation(row)
+            );
         });
     }
 
-    /**
-     * Applies an atomic favorites update: the current favorites are read
-     * inside the per-playlist write queue, so overlapping calls cannot work
-     * from stale snapshots. Callers should pass a pure transform instead of
-     * precomputing the next favorites array from an earlier read.
-     */
+    /** Explicit membership actions; the optional bridge persists projection and intent atomically. */
     transformPlaylistFavorites(
         playlistId: string,
         transform: (
-            currentFavorites: NonNullable<Playlist['favorites']>
+            current: NonNullable<Playlist['favorites']>
         ) => NonNullable<Playlist['favorites']>
     ): Observable<Playlist> {
-        if (!playlistId) {
-            throw new Error('Playlist ID is required');
-        }
-
-        return this.serializePlaylistWrite(playlistId, async () => {
-            const playlist = await firstValueFrom(
-                this.getPlaylistById(playlistId)
-            );
-            if (!playlist) {
-                throw new Error(`Playlist not found: ${playlistId}`);
-            }
-
-            const currentFavorites = Array.isArray(playlist.favorites)
-                ? playlist.favorites
-                : [];
-            const nextPlaylist: Playlist = {
-                ...playlist,
-                favorites: transform(currentFavorites),
-            };
-
-            await this.persistPlaylistMutation(nextPlaylist);
-            return nextPlaylist;
-        });
+        if (!playlistId) throw new Error('Playlist ID is required');
+        return this.favoriteMutation(playlistId, transform);
     }
 
     /**
@@ -1073,19 +1108,10 @@ export class PlaylistsService {
         );
     }
 
-    getFavoriteChannels(playlistId: string) {
-        return this.getPlaylistById(playlistId).pipe(
-            map((data) =>
-                (data.playlist?.items ?? []).filter((channel: Channel) =>
-                    data.favorites?.includes(channel.id)
-                )
-            )
-        );
-    }
-
     getM3uFavoriteChannels(
         playlistId: string
     ): Observable<M3uFavoriteChannel[] | null> {
+        if (this.favoriteSync.active()) return of(null);
         const store = this.documentStore;
         const getFavoriteChannels = store?.dbGetAppPlaylistFavoriteChannels;
         if (
@@ -1113,93 +1139,42 @@ export class PlaylistsService {
         );
     }
 
+    preparePortalFavoriteActions() {
+        return import('./playlist-favorites');
+    }
+
     getPortalFavorites(portalId: string) {
         if (!portalId) {
             throw new Error('Portal ID is required');
         }
 
         return this.getPlaylistById(portalId).pipe(
-            map((item) => {
-                if (!item || !item.favorites) return [];
-                return item.favorites as PortalFavoriteItem[];
-            }),
-            map((favorites) =>
-                favorites.sort(
-                    (a, b) =>
-                        new Date(b.added_at ?? '').getTime() -
-                        new Date(a.added_at ?? '').getTime()
-                )
-            )
-        );
-    }
-
-    getPortalLiveStreamFavorites(portalId: string) {
-        return this.getPlaylistById(portalId).pipe(
-            map((item) => {
-                if (!item || !item.favorites) return [];
-                return (item.favorites as PortalFavoriteItem[]).filter(
-                    (itm) =>
-                        itm && itm.stream_type && itm.stream_type === 'live'
+            switchMap(async (playlist) => {
+                const { sortedPortalFavorites } =
+                    await this.preparePortalFavoriteActions();
+                return sortedPortalFavorites(
+                    await this.favoriteSync.project(playlist)
                 );
             })
         );
     }
 
     addPortalFavorite(portalId: string, item: PortalFavoriteItem) {
-        if (!portalId) {
-            throw new Error('Portal ID is required');
-        }
-        return this.serializePlaylistWrite(portalId, async () => {
-            const portal = await firstValueFrom(this.getPlaylistById(portalId));
-
-            return this.persistPlaylistMutation({
-                ...portal,
-                favorites: [...(portal.favorites ?? []), item],
-            });
-        });
+        return this.favoriteMutation(portalId, (current) => [...current, item]);
     }
 
-    setPortalFavorites(portalId: string, favorites: StalkerPortalItem[]) {
-        if (!portalId) {
-            throw new Error('Portal ID is required');
-        }
-
-        return this.serializePlaylistWrite(portalId, async () => {
-            const portal = await firstValueFrom(this.getPlaylistById(portalId));
-
-            return this.persistPlaylistMutation({
-                ...portal,
-                favorites,
-            });
-        });
-    }
-
-    removeFromPortalFavorites(portalId: string, favoriteId: number | string) {
-        if (!portalId) {
-            throw new Error('Portal ID is required');
-        }
-        return this.serializePlaylistWrite(portalId, async () => {
-            const portal = await firstValueFrom(this.getPlaylistById(portalId));
-
-            return this.persistPlaylistMutation({
-                ...portal,
-                favorites: portal.favorites?.filter((i) => {
-                    const expectedId = String(favoriteId);
-                    const favorite = i as PortalFavoriteItem;
-                    const streamId = String(favorite.stream_id ?? '');
-                    const seriesId = String(favorite.series_id ?? '');
-                    const movieId = String(favorite.movie_id ?? '');
-                    const itemId = String(favorite.id ?? '');
-
-                    return (
-                        streamId !== expectedId &&
-                        seriesId !== expectedId &&
-                        movieId !== expectedId &&
-                        itemId !== expectedId
-                    );
-                }),
-            });
-        });
+    removeFromPortalFavorites(
+        portalId: string,
+        favoriteId: number | string,
+        context?: StalkerPortalItem
+    ) {
+        return from(this.preparePortalFavoriteActions()).pipe(
+            switchMap(({ removePortalFavorite }) =>
+                this.favoriteMutation(portalId, (current) =>
+                    removePortalFavorite(current, favoriteId, context)
+                )
+            )
+        );
     }
 
     updatePlaylistPositions(
@@ -1267,10 +1242,12 @@ export class PlaylistsService {
 
     getPlaylistWithGlobalFavorites() {
         return this.getAllData().pipe(
-            map((playlists: Playlist[]) => {
-                const favoriteChannels = aggregateFavoriteChannels(playlists);
-                const favPlaylist = createFavoritesPlaylist(favoriteChannels);
-                return favPlaylist;
+            switchMap(async (rows) => {
+                const { globalFavoritePlaylist } =
+                    await import('./playlist-favorites');
+                return globalFavoritePlaylist(
+                    await this.projectFavoriteMetas(rows)
+                );
             })
         );
     }
@@ -1307,19 +1284,6 @@ export class PlaylistsService {
                     .map((playlist) => this.toAutoUpdatePlaylistMeta(playlist));
             })
         );
-    }
-
-    setFavorites(playlistId: string, favorites: string[]) {
-        return this.serializePlaylistWrite(playlistId, async () => {
-            const playlist = await firstValueFrom(
-                this.getPlaylistById(playlistId)
-            );
-
-            return this.persistPlaylistMutation({
-                ...playlist,
-                favorites,
-            });
-        });
     }
 
     getRawPlaylistById(id: string) {
@@ -1378,6 +1342,11 @@ export class PlaylistsService {
             if (store) {
                 this.startupMetas = null;
                 await store.dbDeleteAllPlaylists();
+                if (this.usesElectronStorage) {
+                    const { XtreamDeferredCatalogRestoreService } =
+                        await import('./xtream-deferred-catalog-restore.service');
+                    new XtreamDeferredCatalogRestoreService().clearAll();
+                }
                 this.healthEvidence?.connections.next({});
             }
             return;
@@ -1385,53 +1354,17 @@ export class PlaylistsService {
         await firstValueFrom(this.dbService.clear(DbStores.Playlists));
     }
 
-    private normalizePortalRecentIdentity(value: unknown): string {
-        const raw = String(value ?? '').trim();
-        if (!raw) {
-            return '';
-        }
-        return raw.includes(':') ? raw.split(':')[0] : raw;
-    }
-
-    private getPlaylistRecentIdentity(
-        item: PlaylistRecentlyViewedItem
-    ): string {
-        if (isM3uRecentlyViewedItem(item)) {
-            return String(item.url ?? item.id ?? '').trim();
-        }
-
-        return this.normalizePortalRecentIdentity(
-            extractStalkerItemId(item ?? {})
-        );
-    }
-
-    private matchesPlaylistRecentIdentity(
-        item: PlaylistRecentlyViewedItem,
-        expectedIdentity: string | number
-    ): boolean {
-        const expectedRaw = String(expectedIdentity ?? '').trim();
-        if (!expectedRaw) {
-            return false;
-        }
-
-        if (isM3uRecentlyViewedItem(item)) {
-            return this.getPlaylistRecentIdentity(item) === expectedRaw;
-        }
-
-        return (
-            this.getPlaylistRecentIdentity(item) ===
-            this.normalizePortalRecentIdentity(expectedRaw)
-        );
-    }
-
-    private sortPlaylistRecentItems(
-        items: PlaylistRecentlyViewedItem[]
-    ): PlaylistRecentlyViewedItem[] {
-        return [...items].sort(
-            (a, b) =>
-                new Date(normalizeStalkerDate(b.added_at ?? '')).getTime() -
-                new Date(normalizeStalkerDate(a.added_at ?? '')).getTime()
-        );
+    private historyMutation(playlistId: string, action: HistoryPlaylistAction) {
+        return this.serializePlaylistWrite(playlistId, async () => {
+            const { mutatePlaylistHistory } =
+                await import('./playlist-history');
+            return mutatePlaylistHistory(
+                await firstValueFrom(this.getPlaylistById(playlistId)),
+                action,
+                this.historySync,
+                (row) => this.persistPlaylistMutation(row)
+            );
+        });
     }
 
     getPlaylistRecentlyViewed(playlistId: string) {
@@ -1440,13 +1373,12 @@ export class PlaylistsService {
         }
 
         return this.getPlaylistById(playlistId).pipe(
-            map((item) => {
-                if (!item || !Array.isArray(item.recentlyViewed)) {
-                    return [];
-                }
-                return item.recentlyViewed as PlaylistRecentlyViewedItem[];
-            }),
-            map((items) => this.sortPlaylistRecentItems(items))
+            switchMap((playlist) => this.historySync.project(playlist)),
+            switchMap(async (playlist) => {
+                const { sortedPlaylistHistory } =
+                    await import('./playlist-history');
+                return sortedPlaylistHistory(playlist);
+            })
         );
     }
 
@@ -1458,66 +1390,21 @@ export class PlaylistsService {
             throw new Error('Playlist ID is required');
         }
 
-        return this.serializePlaylistWrite(playlistId, async () => {
-            const playlist = await firstValueFrom(
-                this.getPlaylistById(playlistId)
-            );
-            const nowIso = new Date().toISOString();
-            const recentItems = Array.isArray(playlist.recentlyViewed)
-                ? (playlist.recentlyViewed as PlaylistRecentlyViewedItem[])
-                : [];
-            const existingIndex = recentItems.findIndex((recentItem) =>
-                this.matchesPlaylistRecentIdentity(
-                    recentItem,
-                    this.getPlaylistRecentIdentity(item)
-                )
-            );
-            const existingItem =
-                existingIndex >= 0 ? recentItems[existingIndex] : null;
-            const nextItem: PlaylistRecentlyViewedItem = {
-                ...(existingItem ?? {}),
-                ...item,
-                added_at: nowIso,
-            };
-            const remainingItems = recentItems.filter(
-                (_, index) => index !== existingIndex
-            );
-
-            return this.persistPlaylistMutation({
-                ...playlist,
-                recentlyViewed: [nextItem, ...remainingItems],
-            });
-        });
+        return this.historyMutation(playlistId, { kind: 'touch', item });
     }
 
     removeFromPlaylistRecentlyViewed(
         playlistId: string,
-        identity: string | number
+        identity: PlaylistRecentIdentity
     ) {
-        if (!playlistId) {
-            throw new Error('Playlist ID is required');
-        }
-
-        return this.serializePlaylistWrite(playlistId, async () => {
-            const playlist = await firstValueFrom(
-                this.getPlaylistById(playlistId)
-            );
-
-            return this.persistPlaylistMutation({
-                ...playlist,
-                recentlyViewed: (
-                    playlist.recentlyViewed as PlaylistRecentlyViewedItem[]
-                )?.filter(
-                    (item) =>
-                        !this.matchesPlaylistRecentIdentity(item, identity)
-                ),
-            });
-        });
+        return this.removeFromPlaylistRecentlyViewedBatch(playlistId, [
+            identity,
+        ]);
     }
 
     removeFromPlaylistRecentlyViewedBatch(
         playlistId: string,
-        identities: ReadonlyArray<string | number>
+        identities: ReadonlyArray<PlaylistRecentIdentity>
     ) {
         if (!playlistId) {
             throw new Error('Playlist ID is required');
@@ -1527,22 +1414,9 @@ export class PlaylistsService {
             return this.getPlaylistById(playlistId);
         }
 
-        return this.serializePlaylistWrite(playlistId, async () => {
-            const playlist = await firstValueFrom(
-                this.getPlaylistById(playlistId)
-            );
-
-            return this.persistPlaylistMutation({
-                ...playlist,
-                recentlyViewed: (
-                    playlist.recentlyViewed as PlaylistRecentlyViewedItem[]
-                )?.filter(
-                    (item) =>
-                        !identities.some((identity) =>
-                            this.matchesPlaylistRecentIdentity(item, identity)
-                        )
-                ),
-            });
+        return this.historyMutation(playlistId, {
+            kind: 'remove',
+            identities: [...identities],
         });
     }
 
@@ -1551,16 +1425,7 @@ export class PlaylistsService {
             throw new Error('Playlist ID is required');
         }
 
-        return this.serializePlaylistWrite(playlistId, async () => {
-            const playlist = await firstValueFrom(
-                this.getPlaylistById(playlistId)
-            );
-
-            return this.persistPlaylistMutation({
-                ...playlist,
-                recentlyViewed: [],
-            });
-        });
+        return this.historyMutation(playlistId, { kind: 'clear' });
     }
 
     getPortalRecentlyViewed(portalId: string) {
@@ -1585,7 +1450,10 @@ export class PlaylistsService {
         return this.addPlaylistRecentlyViewed(playlistId, item);
     }
 
-    removeFromPortalRecentlyViewed(portalId: string, id: string | number) {
+    removeFromPortalRecentlyViewed(
+        portalId: string,
+        id: PlaylistRecentIdentity
+    ) {
         return this.removeFromPlaylistRecentlyViewed(portalId, id);
     }
 

@@ -11,6 +11,8 @@ import {
 import { TranslateService } from '@ngx-translate/core';
 import { SettingsContextService } from '@iptvnator/workspace/shell/util/settings-context';
 import { SettingsStore } from '../services/settings-store.service';
+import { SettingsService } from '../services/settings.service';
+import { AppDateLocaleService } from '../app-date-locales';
 import { SettingsComponent } from './settings.component';
 import {
     configureSettingsComponentTestBed,
@@ -61,6 +63,229 @@ describe('SettingsComponent form', () => {
         window.electron = originalElectron;
     });
 
+    it.each([
+        'CREAM_THEME',
+        'MOCHA_THEME',
+        'NIGHT_OWL_THEME',
+        'BLACK_OLED_THEME',
+        'HIGH_CONTRAST_THEME',
+    ])(
+        'previews %s from the palette picker and restores the saved theme on Discard',
+        (value) => {
+            setSettingsSection('appearance');
+            fixture.detectChanges();
+            const service = TestBed.inject(SettingsService);
+            const changeTheme = jest.spyOn(service, 'changeTheme');
+            const saved = component.settingsForm.value.theme;
+            const option = (fixture.nativeElement as HTMLElement).querySelector(
+                `[data-test-id="${value}"]`
+            ) as HTMLButtonElement;
+            expect(option).not.toBeNull();
+            expect(option.querySelector('[data-theme-preview]')).not.toBeNull();
+            option.click();
+            fixture.detectChanges();
+            expect(component.settingsForm.value.theme).toBe(value);
+            expect(changeTheme).toHaveBeenLastCalledWith(value);
+            expect(option.getAttribute('aria-checked')).toBe('true');
+            expect(settingsStore.updateSettings).not.toHaveBeenCalled();
+            component.discardChanges();
+            fixture.detectChanges();
+            expect(component.settingsForm.value.theme).toBe(saved);
+            expect(changeTheme).toHaveBeenLastCalledWith(saved);
+        }
+    );
+
+    it('previews an accent from the swatches and restores the saved one on Discard', () => {
+        setSettingsSection('appearance');
+        fixture.detectChanges();
+        const service = TestBed.inject(SettingsService);
+        const changeThemeAccent = jest.spyOn(service, 'changeThemeAccent');
+        const root = fixture.nativeElement as HTMLElement;
+        const themeSwatch = root.querySelector(
+            '[data-test-id="theme-accent-theme"]'
+        ) as HTMLButtonElement;
+        const magenta = root.querySelector(
+            '[data-test-id="theme-accent-magenta"]'
+        ) as HTMLButtonElement;
+        expect(themeSwatch.getAttribute('aria-checked')).toBe('true');
+        // The theme's own colour comes from its preview palette.
+        expect(
+            themeSwatch.querySelector('[data-theme-preview="light"]')
+        ).not.toBeNull();
+
+        magenta.click();
+        fixture.detectChanges();
+        expect(component.settingsForm.value.themeAccent).toBe('magenta');
+        expect(changeThemeAccent).toHaveBeenLastCalledWith('magenta');
+        expect(magenta.getAttribute('aria-checked')).toBe('true');
+        expect(component.settingsForm.dirty).toBe(true);
+        expect(settingsStore.updateSettings).not.toHaveBeenCalled();
+
+        component.discardChanges();
+        fixture.detectChanges();
+        expect(component.settingsForm.value.themeAccent).toBeNull();
+        expect(changeThemeAccent).toHaveBeenLastCalledWith(null);
+        expect(themeSwatch.getAttribute('aria-checked')).toBe('true');
+    });
+
+    it('restores the saved appearance when a backup import replaces the draft', () => {
+        const service = TestBed.inject(SettingsService);
+        const changeThemeAccent = jest.spyOn(service, 'changeThemeAccent');
+        const changeSystemThemes = jest.spyOn(service, 'changeSystemThemes');
+        const changeTheme = jest.spyOn(service, 'changeTheme');
+        jest.spyOn(component.backup, 'importData').mockImplementation(
+            (onImported) => onImported()
+        );
+
+        component.form.selectThemeAccent('magenta');
+        component.form.selectSystemTheme('light', Theme.CreamTheme);
+        component.form.selectTheme(Theme.DarkTheme);
+        expect(component.settingsForm.dirty).toBe(true);
+
+        component.importData();
+
+        expect(component.settingsForm.pristine).toBe(true);
+        expect(changeThemeAccent).toHaveBeenLastCalledWith(null);
+        expect(changeSystemThemes).toHaveBeenLastCalledWith(
+            Theme.LightTheme,
+            Theme.DarkTheme
+        );
+        expect(changeTheme).toHaveBeenLastCalledWith(Theme.SystemTheme);
+    });
+
+    it('stages the System pair, previews it and restores it on Discard', () => {
+        setSettingsSection('appearance');
+        fixture.detectChanges();
+        const service = TestBed.inject(SettingsService);
+        const changeSystemThemes = jest.spyOn(service, 'changeSystemThemes');
+        const root = fixture.nativeElement as HTMLElement;
+        expect(component.settingsForm.value.theme).toBe(Theme.SystemTheme);
+
+        const dark = root.querySelector('[data-test-id="system-dark-theme"]');
+        const options = [
+            ...(dark?.querySelectorAll('button') ?? []),
+        ].map((button) => button.getAttribute('data-test-id'));
+        // Only dark presets can be the dark choice.
+        expect(options).toEqual([
+            'system-dark-dark',
+            'system-dark-mocha',
+            'system-dark-night-owl',
+            'system-dark-black-oled',
+            'system-dark-high-contrast',
+        ]);
+
+        (
+            root.querySelector(
+                '[data-test-id="system-light-cream"]'
+            ) as HTMLButtonElement
+        ).click();
+        fixture.detectChanges();
+        expect(component.settingsForm.value.systemLightTheme).toBe(
+            Theme.CreamTheme
+        );
+        expect(changeSystemThemes).toHaveBeenLastCalledWith(
+            Theme.CreamTheme,
+            Theme.DarkTheme
+        );
+        expect(settingsStore.updateSettings).not.toHaveBeenCalled();
+
+        component.discardChanges();
+        fixture.detectChanges();
+        expect(component.settingsForm.value.systemLightTheme).toBe(
+            Theme.LightTheme
+        );
+        expect(changeSystemThemes).toHaveBeenLastCalledWith(
+            Theme.LightTheme,
+            Theme.DarkTheme
+        );
+    });
+
+    it('keeps arrow keys in the System pair apart from the theme group', () => {
+        setSettingsSection('appearance');
+        fixture.detectChanges();
+        const root = fixture.nativeElement as HTMLElement;
+        const press = (testId: string) =>
+            root
+                .querySelector(`[data-test-id="${testId}"]`)
+                ?.dispatchEvent(
+                    new KeyboardEvent('keydown', {
+                        key: 'ArrowRight',
+                        bubbles: true,
+                    })
+                );
+
+        // The last dark preset wraps to the first one, inside the pair only.
+        press('system-dark-high-contrast');
+        fixture.detectChanges();
+        expect(component.settingsForm.value.systemDarkTheme).toBe(
+            Theme.DarkTheme
+        );
+        expect(component.settingsForm.value.theme).toBe(Theme.SystemTheme);
+
+        // System, the theme group's last option, wraps to its first preset.
+        press(Theme.SystemTheme);
+        fixture.detectChanges();
+        expect(component.settingsForm.value.theme).toBe(Theme.LightTheme);
+        expect(component.settingsForm.value.systemLightTheme).toBe(
+            Theme.LightTheme
+        );
+    });
+
+    it('hides the System pair while an explicit theme is selected', () => {
+        setSettingsSection('appearance');
+        fixture.detectChanges();
+        component.form.selectTheme(Theme.MochaTheme);
+        fixture.detectChanges();
+
+        expect(
+            (fixture.nativeElement as HTMLElement).querySelector('.system-pair')
+        ).toBeNull();
+    });
+
+    it('updates the saved key in the open form without saving an unrelated draft', async () => {
+        await fixture.whenStable();
+        const form = component.settingsForm;
+        form.controls.showCaptions.setValue(!form.controls.showCaptions.value);
+        form.markAsDirty();
+        settingsStore._setSettings({
+            ...DEFAULT_SETTINGS,
+            tmdb: { enabled: false, apiKey: 'synthetic-received-key' },
+        });
+
+        component.form.applyTransferredTmdbKey();
+
+        expect(form.controls.tmdb.controls.apiKey.value).toBe(
+            'synthetic-received-key'
+        );
+        expect(component.form.changedPaths()).toEqual(['showCaptions']);
+        expect(settingsStore.updateSettings).not.toHaveBeenCalled();
+        expect(snackBar.open).toHaveBeenCalledWith(
+            'SETTINGS.TMDB_TRANSFER.SAVED',
+            undefined,
+            expect.anything()
+        );
+    });
+
+    it('keeps a staged key edit when another tab saves a replacement', async () => {
+        await fixture.whenStable();
+        const key = component.settingsForm.controls.tmdb.controls.apiKey;
+        key.setValue('synthetic-draft-key');
+        key.markAsDirty();
+        settingsStore.savedTmdbApiKey.set('synthetic-other-tab-key');
+        fixture.detectChanges();
+        await fixture.whenStable();
+
+        expect(key.value).toBe('synthetic-draft-key');
+        expect(component.form.changedPaths()).toContain('tmdb.apiKey');
+        await component.form.save(() => undefined);
+        expect(settingsStore.updateSettings).toHaveBeenCalledWith(
+            expect.objectContaining({
+                tmdb: { enabled: false, apiKey: 'synthetic-draft-key' },
+            }),
+            expect.anything()
+        );
+    });
+
     it('stages the desktop portal pause setting until Save', async () => {
         const checkbox = (fixture.nativeElement as HTMLElement).querySelector(
             '[data-test-id="portal-connectivity-toggle"] button[role="switch"]'
@@ -84,6 +309,8 @@ describe('SettingsComponent form', () => {
     });
 
     it('stages the posters-only cover wall until Save', async () => {
+        setSettingsSection('appearance');
+        fixture.detectChanges();
         const checkbox = (fixture.nativeElement as HTMLElement).querySelector(
             '[data-test-id="cover-titles-toggle"] button[role="switch"]'
         ) as HTMLButtonElement;
@@ -150,6 +377,8 @@ describe('SettingsComponent form', () => {
         // itself on the form's events. The fixture renders on its own here:
         // a forced detectChanges() would hide a section that is not marked.
         it('re-renders section selections after a value-only form patch', async () => {
+            setSettingsSection('appearance');
+            fixture.detectChanges();
             const darkTheme = () =>
                 (fixture.nativeElement as HTMLElement).querySelector(
                     '[data-test-id="DARK_THEME"]'
@@ -178,7 +407,9 @@ describe('SettingsComponent form', () => {
     });
 
     describe('Section outputs', () => {
-        it('updates the selected theme through the general section and marks the form dirty', () => {
+        it('updates the selected theme through the appearance section and marks the form dirty', () => {
+            setSettingsSection('appearance');
+            fixture.detectChanges();
             const darkThemeButton = (
                 fixture.nativeElement as HTMLElement
             ).querySelector('[data-test-id="DARK_THEME"]') as HTMLButtonElement;
@@ -191,6 +422,8 @@ describe('SettingsComponent form', () => {
         });
 
         it('stages cover size without writing to the store until Save', () => {
+            setSettingsSection('appearance');
+            fixture.detectChanges();
             const largeCoverButton = (
                 fixture.nativeElement as HTMLElement
             ).querySelector(
@@ -343,16 +576,174 @@ describe('SettingsComponent form', () => {
 
         it('hides again after a successful save', async () => {
             settingsStore.updateSettings.mockResolvedValue(undefined);
+            const save = jest.spyOn(component.form, 'save');
             component.settingsForm.get('theme')?.setValue(Theme.DarkTheme);
             component.settingsForm.markAsDirty();
             fixture.detectChanges();
 
             component.onSubmit();
+            await save.mock.results[0].value;
             await fixture.whenStable();
             fixture.detectChanges();
 
             expect(component.settingsForm.pristine).toBe(true);
             expect(unsavedBar()).toBeNull();
+        });
+
+        it.each(['storage', 'backend'])(
+            'keeps later edits dirty when the %s save completes',
+            async (pendingStep) => {
+                await fixture.whenStable();
+                let finishSave!: () => void;
+                const pending = new Promise<void>((resolve) => {
+                    finishSave = resolve;
+                });
+                if (pendingStep === 'storage') {
+                    settingsStore.updateSettings.mockReturnValueOnce(pending);
+                } else {
+                    jest.spyOn(
+                        window.electron,
+                        'updateSettings'
+                    ).mockReturnValueOnce(pending);
+                }
+                component.settingsForm.patchValue({
+                    playerAmbientMode: true,
+                    startupWindowMode: 'maximized',
+                });
+                component.settingsForm.markAsDirty();
+                const save = jest.spyOn(component.form, 'save');
+                component.onSubmit();
+                await Promise.resolve();
+
+                component.settingsForm.patchValue({
+                    playerAmbientMode: false,
+                    startupWindowMode: 'normal',
+                });
+                component.settingsForm.markAsDirty();
+                finishSave();
+                await save.mock.results[0].value;
+                await fixture.whenStable();
+
+                expect(component.settingsForm.dirty).toBe(true);
+                expect(component.form.changedPaths()).toEqual([
+                    'playerAmbientMode',
+                    'startupWindowMode',
+                ]);
+                expect(component.form.restartPendingControls()).toEqual([
+                    'startupWindowMode',
+                ]);
+                expect(window.electron.updateSettings).toHaveBeenCalledWith(
+                    expect.objectContaining({
+                        playerAmbientMode: true,
+                        startupWindowMode: 'maximized',
+                    })
+                );
+                component.settingsForm.patchValue({
+                    playerAmbientMode: true,
+                    startupWindowMode: 'maximized',
+                });
+                expect(component.form.changedPaths()).toEqual([]);
+            }
+        );
+
+        it.each([
+            { pendingStep: 'storage', failed: false },
+            { pendingStep: 'backend', failed: false },
+            { pendingStep: 'storage', failed: true },
+            { pendingStep: 'backend', failed: true },
+        ])(
+            'ignores an older $pendingStep save after a newer save (failed: $failed)',
+            async ({ pendingStep, failed }) => {
+                await fixture.whenStable();
+                const changeLanguage = jest
+                    .spyOn(TestBed.inject(AppDateLocaleService), 'use')
+                    .mockResolvedValue(undefined);
+                let finishOlderSave!: () => void;
+                let failOlderSave!: (error: Error) => void;
+                const pending = new Promise<void>((resolve, reject) => {
+                    finishOlderSave = resolve;
+                    failOlderSave = reject;
+                });
+                if (pendingStep === 'storage') {
+                    settingsStore.updateSettings.mockReturnValueOnce(pending);
+                } else {
+                    jest.spyOn(
+                        window.electron,
+                        'updateSettings'
+                    ).mockReturnValueOnce(pending);
+                }
+                component.settingsForm.patchValue({
+                    language: Language.GERMAN,
+                    startupWindowMode: 'maximized',
+                });
+                component.settingsForm.markAsDirty();
+                const older = component.form.save(() =>
+                    component.applyChangedSettings()
+                );
+                await Promise.resolve();
+
+                component.settingsForm.patchValue({
+                    language: Language.FRENCH,
+                    startupWindowMode: 'normal',
+                });
+                await component.form.save(() =>
+                    component.applyChangedSettings()
+                );
+                expect(component.settingsForm.pristine).toBe(true);
+
+                if (failed) failOlderSave(new Error('Superseded save failed'));
+                else finishOlderSave();
+                await older;
+                await fixture.whenStable();
+
+                expect(component.settingsForm.pristine).toBe(true);
+                expect(component.form.changedPaths()).toEqual([]);
+                expect(component.form.restartPendingControls()).toEqual([]);
+                expect(changeLanguage).toHaveBeenLastCalledWith(
+                    Language.FRENCH
+                );
+                expect(window.electron.updateSettings).toHaveBeenLastCalledWith(
+                    expect.objectContaining({ language: Language.FRENCH })
+                );
+            }
+        );
+
+        it('preserves a newer theme preview while applying only the submitted language', async () => {
+            await fixture.whenStable();
+            const changeTheme = jest.spyOn(
+                TestBed.inject(SettingsService),
+                'changeTheme'
+            );
+            const changeLanguage = jest
+                .spyOn(TestBed.inject(AppDateLocaleService), 'use')
+                .mockResolvedValue(undefined);
+            let finishUpdate!: () => void;
+            const pending = new Promise<void>((resolve) => {
+                finishUpdate = resolve;
+            });
+            jest.spyOn(window.electron, 'updateSettings').mockReturnValueOnce(
+                pending
+            );
+            component.form.selectTheme(Theme.DarkTheme);
+            component.settingsForm.patchValue({ language: Language.GERMAN });
+            const save = jest.spyOn(component.form, 'save');
+            component.onSubmit();
+            await Promise.resolve();
+
+            component.form.selectTheme(Theme.LightTheme);
+            component.settingsForm.patchValue({ language: Language.FRENCH });
+            finishUpdate();
+            await save.mock.results[0].value;
+            await fixture.whenStable();
+
+            expect(changeTheme).toHaveBeenLastCalledWith(Theme.LightTheme);
+            expect(changeLanguage).toHaveBeenLastCalledWith(Language.GERMAN);
+            expect(component.settingsForm.value.theme).toBe(Theme.LightTheme);
+            expect(component.settingsForm.dirty).toBe(true);
+            expect(component.form.changedPaths()).toEqual([
+                'language',
+                'theme',
+            ]);
         });
 
         // The page owns the bar and is OnPush, and Save marks the form
@@ -362,6 +753,7 @@ describe('SettingsComponent form', () => {
         // here, so a regression shows.
         it('hides after a save on a page without a form section', async () => {
             settingsStore.updateSettings.mockResolvedValue(undefined);
+            const save = jest.spyOn(component.form, 'save');
             setSettingsSection('backup');
             fixture.autoDetectChanges();
             component.settingsForm.get('theme')?.setValue(Theme.DarkTheme);
@@ -370,6 +762,7 @@ describe('SettingsComponent form', () => {
             expect(unsavedBar()).not.toBeNull();
 
             component.onSubmit();
+            await save.mock.results[0].value;
             await fixture.whenStable();
             // The render the form event scheduled runs in the next macrotask.
             await new Promise((resolve) => setTimeout(resolve));
@@ -393,7 +786,9 @@ describe('SettingsComponent form', () => {
             expect(component.unsavedMessageKey()).toBe(
                 'SETTINGS.UNSAVED_CHANGES_ONE'
             );
-            expect(settingsCtx.dirtySections()).toEqual(new Set(['general']));
+            expect(settingsCtx.dirtySections()).toEqual(
+                new Set(['appearance'])
+            );
 
             component.settingsForm
                 .get('dashboardRails.hero')
@@ -407,7 +802,7 @@ describe('SettingsComponent form', () => {
             );
             expect(message()).toContain('SETTINGS.UNSAVED_CHANGES_COUNT');
             expect(settingsCtx.dirtySections()).toEqual(
-                new Set(['general', 'dashboard', 'playback'])
+                new Set(['appearance', 'dashboard', 'playback'])
             );
 
             // Reverting by hand leaves the form dirty but counts nothing.
@@ -617,6 +1012,8 @@ describe('SettingsComponent form', () => {
         });
 
         it('discard reverts a staged cover size (regression: eager persist made it stick)', () => {
+            setSettingsSection('appearance');
+            fixture.detectChanges();
             const largeCoverButton = (
                 fixture.nativeElement as HTMLElement
             ).querySelector(
@@ -679,6 +1076,7 @@ describe('SettingsComponent form', () => {
             expect(settingsStore.updateSettings).toHaveBeenCalledWith(
                 {
                     ...component.settingsForm.value,
+                    tmdb: { enabled: false },
                     trustedPrivateNetworkEpgUrls: [],
                     trustedInsecureTlsHosts: [],
                     // Parental lock settings are not on the form; Save

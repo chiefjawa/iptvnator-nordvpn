@@ -26,6 +26,7 @@ import { EPG_ACTIONS } from './capture-navigation-epg-actions';
 import { PORTAL_ACTIONS } from './capture-navigation-portal-actions';
 import { SETUP_ACTIONS } from './capture-navigation-setup-actions';
 import { FEATURE_ACTIONS } from './capture-navigation-feature-actions';
+import { CINEMATIC_ACTIONS } from './capture-navigation-cinematic-actions';
 
 export {
     clickDialogOption,
@@ -43,6 +44,7 @@ const ACTIONS: Readonly<Record<string, CaptureAction>> = {
     ...DOWNLOAD_ACTIONS,
     ...EPG_ACTIONS,
     ...FEATURE_ACTIONS,
+    ...CINEMATIC_ACTIONS,
 };
 
 /* ------------------------------------------------------------------ */
@@ -53,7 +55,7 @@ export async function applyTheme(
     page: Page,
     theme: 'dark' | 'light'
 ): Promise<void> {
-    await runAction(page, 'open-settings', null);
+    await runAction(page, 'open-settings-appearance', null);
     const testId = theme === 'dark' ? 'DARK_THEME' : 'LIGHT_THEME';
     const themeButton = page.locator(`[data-test-id="${testId}"]`).first();
 

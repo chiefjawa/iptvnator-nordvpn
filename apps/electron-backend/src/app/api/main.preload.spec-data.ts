@@ -2,9 +2,9 @@ import type { ElectronBridgeApi } from '@iptvnator/shared/interfaces';
 
 type ElectronBridgeMethodName = Extract<
     {
-        [K in keyof ElectronBridgeApi]: NonNullable<ElectronBridgeApi[K]> extends (
-            ...args: never[]
-        ) => unknown
+        [K in keyof ElectronBridgeApi]: NonNullable<
+            ElectronBridgeApi[K]
+        > extends (...args: never[]) => unknown
             ? K
             : never;
     }[keyof ElectronBridgeApi],
@@ -64,7 +64,36 @@ const vodSourcePin = {
 };
 
 export const dbPreloadCases: PreloadInvokeCase[] = [
-    { method: 'sourceSyncLocalSources', args: [], channel: 'DB_GET_STANDALONE_SOURCES', forwardedArgs: [] },
+    {
+        method: 'historyLocalRequest',
+        args: [{ instanceId: 'history-test-instance', operation: 'read' }],
+        channel: 'DB_HISTORY_LOCAL',
+        forwardedArgs: [
+            { instanceId: 'history-test-instance', operation: 'read' },
+        ],
+    },
+    {
+        method: 'favoritesLocalRequest',
+        args: [{ instanceId: 'favorites-test-instance', operation: 'pending' }],
+        channel: 'DB_FAVORITES_LOCAL',
+        forwardedArgs: [
+            { instanceId: 'favorites-test-instance', operation: 'pending' },
+        ],
+    },
+    {
+        method: 'activityLocalRequest',
+        args: [{ instanceId: 'activity-test-instance', operation: 'pending' }],
+        channel: 'DB_ACTIVITY_LOCAL',
+        forwardedArgs: [
+            { instanceId: 'activity-test-instance', operation: 'pending' },
+        ],
+    },
+    {
+        method: 'sourceSyncLocalSources',
+        args: [],
+        channel: 'DB_GET_STANDALONE_SOURCES',
+        forwardedArgs: [],
+    },
     {
         method: 'dbCreatePlaylist',
         args: [playlist],
@@ -350,6 +379,18 @@ export const dbPreloadCases: PreloadInvokeCase[] = [
         forwardedArgs: [42, playlistId, 'movie'],
     },
     {
+        method: 'dbGetContentByXtreamId',
+        args: [42, playlistId, 'movie', undefined, 8],
+        channel: 'DB_GET_CONTENT_BY_XTREAM_ID',
+        forwardedArgs: [42, playlistId, 'movie', undefined, 8],
+    },
+    {
+        method: 'dbGetContentByXtreamId',
+        args: [42, playlistId, 'movie', undefined, undefined, true],
+        channel: 'DB_GET_CONTENT_BY_XTREAM_ID',
+        forwardedArgs: [42, playlistId, 'movie', undefined, undefined, true],
+    },
+    {
         method: 'dbSetContentMetadataIfMissing',
         args: [
             12,
@@ -380,10 +421,54 @@ export const dbPreloadCases: PreloadInvokeCase[] = [
         forwardedArgs: ['workspace:last-route'],
     },
     {
+        method: 'dbCheckXtreamCatalogConnection',
+        args: [
+            {
+                playlistId: 'p',
+                serverUrl: 'https://synthetic.invalid',
+                username: 'u',
+                password: 'p',
+            },
+        ],
+        channel: 'DB_CHECK_XTREAM_CATALOG_CONNECTION',
+        forwardedArgs: [
+            {
+                playlistId: 'p',
+                serverUrl: 'https://synthetic.invalid',
+                username: 'u',
+                password: 'p',
+            },
+        ],
+    },
+    {
         method: 'dbSetAppState',
         args: ['workspace:last-route', '/workspace'],
         channel: 'DB_SET_APP_STATE',
         forwardedArgs: ['workspace:last-route', '/workspace'],
+    },
+    {
+        method: 'dbSetAppState',
+        args: [
+            'xtream-import-status:p:movie',
+            'completed',
+            {
+                playlistId: 'p',
+                serverUrl: 'https://synthetic.invalid',
+                username: 'u',
+                password: 'p',
+            },
+        ],
+        channel: 'DB_SET_APP_STATE',
+        forwardedArgs: [
+            'xtream-import-status:p:movie',
+            'completed',
+            {
+                playlistId: 'p',
+                serverUrl: 'https://synthetic.invalid',
+                username: 'u',
+                password: 'p',
+            },
+        ],
     },
     {
         method: 'dbSavePlaybackPosition',
@@ -599,6 +684,12 @@ export const epgPreloadCases: PreloadInvokeCase[] = [
         channel: 'EPG_RECONCILE_SOURCES',
         forwardedArgs: [{ urls: epgUrls }],
     },
+    ...[true, false].map((epgEnabled) => ({
+        method: 'reconcileEpgSources' as const,
+        args: [epgUrls, epgEnabled],
+        channel: 'EPG_RECONCILE_SOURCES',
+        forwardedArgs: [{ urls: epgUrls, epgEnabled }],
+    })),
     {
         method: 'clearEpgDataForSource',
         args: ['https://example.com/guide.xml'],

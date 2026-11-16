@@ -1,6 +1,7 @@
 import { normalizeAgeRatingCountry } from '@iptvnator/shared/interfaces/age-rating';
 import {
     DestroyRef,
+    effect,
     inject,
     Injectable,
     signal,
@@ -18,6 +19,8 @@ import {
     EpgViewMode,
     Language,
     Theme,
+    ThemeAccent,
+    ThemeMode,
 } from '@iptvnator/shared/interfaces';
 import { SettingsSnackbarService } from './settings-snackbar.service';
 import { SettingsStore } from '../services/settings-store.service';
@@ -29,6 +32,11 @@ import {
 } from './settings-change-tracking';
 import { SettingsLaunchValuesService } from './settings-launch-values.service';
 import {
+    normalizeSavedAppearance,
+    previewSystemThemes,
+    restoreSavedAppearance,
+} from './settings-theme-preview';
+import {
     applyEpgUrlsToFormArray,
     createEpgUrlControl,
     createSettingsForm,
@@ -37,6 +45,12 @@ import {
 } from './settings-form.utils';
 
 type SettingsFormPatch = Parameters<SettingsForm['patchValue']>[0];
+
+export class SettingsRuntimeUpdateError extends Error {
+    constructor(readonly cause: unknown) {
+        super('SETTINGS.SETTINGS_RUNTIME_UPDATE_FAILED');
+    }
+}
 
 /**
  * Owns the settings form: creation, hydration from the store, the small
@@ -91,12 +105,17 @@ export class SettingsFormFacade {
     /** Controls whose saved value differs from what the running app uses. */
     readonly restartPendingControls = signal<readonly string[]>([]);
 
-    private savedSnapshot: unknown = {};
+    private savedSnapshot = this.form.getRawValue();
+    private saveRevision = 0;
 
     constructor() {
         this.form.valueChanges
             .pipe(takeUntilDestroyed(this.destroyRef))
             .subscribe(() => this.refreshChangedPaths());
+        effect(() => {
+            const key = this.settingsStore.savedTmdbApiKey();
+            if (key !== undefined) untracked(() => this.syncSavedTmdbKey(key));
+        });
     }
 
     /** Trimmed, non-empty EPG source URLs currently in the form */
@@ -127,6 +146,7 @@ export class SettingsFormFacade {
             ageRatingCountry: normalizeAgeRatingCountry(
                 currentSettings.ageRatingCountry
             ),
+            ...normalizeSavedAppearance(currentSettings),
         });
         this.syncDashboardControlsEnabledState(
             currentSettings.showDashboard ?? true
@@ -171,6 +191,28 @@ export class SettingsFormFacade {
 
         this.patchAndMarkDirty({ theme }, 'theme');
         this.settingsService.changeTheme(theme);
+    }
+
+    /** The preset System shows in one device mode; previews like the theme. */
+    selectSystemTheme(mode: ThemeMode, theme: Theme): void {
+        const control =
+            mode === 'dark' ? 'systemDarkTheme' : 'systemLightTheme';
+        if (this.form.value[control] === theme) {
+            return;
+        }
+
+        this.patchAndMarkDirty({ [control]: theme }, control);
+        previewSystemThemes(this.settingsService, this.form.value);
+    }
+
+    /** Previews immediately like the theme; the write happens on Save. */
+    selectThemeAccent(themeAccent: ThemeAccent | null): void {
+        if ((this.form.value.themeAccent ?? null) === themeAccent) {
+            return;
+        }
+
+        this.patchAndMarkDirty({ themeAccent }, 'themeAccent');
+        void this.settingsService.changeThemeAccent(themeAccent);
     }
 
     /**
@@ -227,32 +269,45 @@ export class SettingsFormFacade {
     /**
      * Persists the form to the settings store and mirrors the result to the
      * desktop backend.
-     * @param onSaved runs after the store write, before the backend is
-     * notified, so the UI confirmation is not delayed by IPC
+     * @param onSaved runs after persistence and the desktop backend update
+     * succeed, so runtime failures keep the form available for retry.
      */
     async save(onSaved: () => void): Promise<void> {
+        const saveRevision = ++this.saveRevision;
+        const submittedSnapshot = this.form.getRawValue();
         const settings = createSettingsFromFormValue(
             this.form,
             this.settingsStore.getSettings()
         );
+        if (
+            settings.tmdb?.apiKey ===
+            (this.savedSnapshot.tmdb.apiKey?.trim() ?? '')
+        )
+            delete settings.tmdb.apiKey;
         let cleanupError: EpgSourceReconciliationError | undefined;
         try {
             await this.settingsStore.updateSettings(settings, {
                 retryEpgCleanup: this.epgUrl?.dirty ?? false,
             });
         } catch (error) {
+            if (saveRevision !== this.saveRevision) return;
             if (!(error instanceof EpgSourceReconciliationError)) throw error;
             // This error follows a successful settings write. Mirror the
             // committed values, but retain the dirty form for cleanup retry.
             cleanupError = error;
         }
-        if (!cleanupError) {
-            onSaved();
-            this.refreshRestartPending();
-        }
-
+        if (saveRevision !== this.saveRevision) return;
         if (window.electron) {
-            window.electron.updateSettings(settings);
+            try {
+                await window.electron.updateSettings({
+                    ...settings,
+                    tmdb: this.settingsStore.getSettings().tmdb,
+                });
+            } catch (error) {
+                if (saveRevision !== this.saveRevision) return;
+                throw new SettingsRuntimeUpdateError(error);
+            }
+            if (saveRevision !== this.saveRevision) return;
 
             if (this.runtime.supportsExternalPlayerPathSettings) {
                 window.electron.setMpvPlayerPath(settings.mpvPlayerPath);
@@ -260,6 +315,11 @@ export class SettingsFormFacade {
             }
         }
         if (cleanupError) throw cleanupError;
+        this.takeSavedSnapshot(submittedSnapshot);
+        const savedTmdbKey = this.settingsStore.savedTmdbApiKey();
+        if (savedTmdbKey !== undefined) this.syncSavedTmdbKey(savedTmdbKey);
+        onSaved();
+        this.refreshRestartPending();
     }
 
     /** Later: the reminder stays away until one of those settings changes. */
@@ -271,16 +331,37 @@ export class SettingsFormFacade {
         this.restartPendingControls.set([]);
     }
 
-    /** Applies the saved language/theme and resets the dirty state */
+    applyTransferredTmdbKey(): void {
+        const apiKey = this.settingsStore.getSettings().tmdb?.apiKey ?? '';
+        this.syncSavedTmdbKey(apiKey, true);
+        this.settingsSnackbar.tmdbKeySaved();
+    }
+
+    private syncSavedTmdbKey(apiKey: string, replaceDraft = false): void {
+        const control = this.form.controls.tmdb.controls.apiKey;
+        const hasDraft = control.value !== this.savedSnapshot.tmdb.apiKey;
+        this.savedSnapshot = {
+            ...this.savedSnapshot,
+            tmdb: { ...this.savedSnapshot.tmdb, apiKey },
+        };
+        if (replaceDraft || !hasDraft) control.setValue(apiKey);
+        else this.refreshChangedPaths();
+    }
+
+    /** Applies saved values while keeping edits made during Save available. */
     applySavedSettings(): void {
-        this.form.markAsPristine();
-        this.takeSavedSnapshot();
+        if (this.changedPaths().length) this.form.markAsDirty();
+        else this.form.markAsPristine();
         // The switch re-renders every date with the new locale; its data is
         // a lazy chunk that must be registered first, and a newer choice
         // must win over an older one whose data arrives later.
-        void this.dateLocales.use(this.form.value.language ?? Language.ENGLISH);
-        this.settingsService.changeTheme(
-            this.form.value.theme ?? Theme.SystemTheme
+        void this.dateLocales.use(
+            this.savedSnapshot.language ?? Language.ENGLISH
+        );
+        restoreSavedAppearance(
+            this.settingsService,
+            this.form.value,
+            this.savedSnapshot
         );
     }
 
@@ -310,8 +391,8 @@ export class SettingsFormFacade {
         }
     }
 
-    private takeSavedSnapshot(): void {
-        this.savedSnapshot = this.form.getRawValue();
+    private takeSavedSnapshot(snapshot = this.form.getRawValue()): void {
+        this.savedSnapshot = snapshot;
         this.refreshChangedPaths();
     }
 

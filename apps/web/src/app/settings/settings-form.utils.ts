@@ -22,11 +22,14 @@ import {
     normalizeEpgOffsetMinutes,
     normalizeParentalLockRelockMinutes,
     normalizeStartupWindowMode,
+    normalizeSystemTheme,
+    normalizeThemeAccent,
     Settings,
     StartupBehavior,
     StartupWindowMode,
     StreamFormat,
     Theme,
+    ThemeAccent,
     validateEmbeddedMpvExtraOptions,
     validateEpgSourceReferenceControl,
     VideoPlayer,
@@ -67,6 +70,7 @@ export function createSettingsForm(
         webPlayerSharedControls: true,
         playerAmbientMode: false,
         detailTrailerBackdrop: false,
+        seriesAutoplay: true,
         playerUpNextRail: true,
         playerUpNextCard: true,
         fullscreenChannelPanel: true,
@@ -102,6 +106,9 @@ export function createSettingsForm(
         showExternalPlaybackBar: true,
         stripCountryPrefix: false,
         theme: Theme.SystemTheme,
+        themeAccent: null as ThemeAccent | null,
+        systemLightTheme: Theme.LightTheme as Theme,
+        systemDarkTheme: Theme.DarkTheme as Theme,
         mpvPlayerPath: '',
         mpvPlayerArguments: '',
         mpvReuseInstance: false,
@@ -130,6 +137,7 @@ export function createSettingsForm(
         // View mode and offset shape every guide, a portal's own included.
         ...(supportsEpgDisplay
             ? {
+                  epgEnabled: true,
                   epgViewMode: 'timeline' as EpgViewMode,
                   epgOffsetMinutes: new FormControl<number>(0, [
                       Validators.required,
@@ -150,6 +158,21 @@ export function createSettingsForm(
     form.get('player')?.valueChanges.subscribe(() =>
         form.get('embeddedMpvExtraOptions')?.updateValueAndValidity()
     );
+    const syncEpgControls = (enabled: boolean): void => {
+        for (const name of [
+            'epgUrl',
+            'epgViewMode',
+            'epgOffsetMinutes',
+            'preferUploadedEpgOverXtream',
+        ]) {
+            const control = form.get(name);
+            if (enabled) control?.enable({ emitEvent: false });
+            else control?.disable({ emitEvent: false });
+        }
+    };
+    form.get('epgEnabled')?.valueChanges.subscribe((enabled) =>
+        syncEpgControls(enabled !== false)
+    );
     return form;
 }
 
@@ -164,8 +187,11 @@ export function applyEpgUrlsToFormArray(
         .map((url) => url.trim())
         .filter((url) => url !== '');
 
+    const disabled = epgUrl.disabled;
     filteredUrls.forEach((url) => {
-        epgUrl.push(createEpgUrlControl(url));
+        const control = createEpgUrlControl(url);
+        if (disabled) control.disable({ emitEvent: false });
+        epgUrl.push(control);
     });
 }
 
@@ -183,6 +209,7 @@ export function createSettingsFromFormValue(
         webPlayerSharedControls: value.webPlayerSharedControls ?? true,
         playerAmbientMode: value.playerAmbientMode ?? false,
         detailTrailerBackdrop: value.detailTrailerBackdrop ?? false,
+        seriesAutoplay: value.seriesAutoplay !== false,
         playerUpNextRail: value.playerUpNextRail ?? true,
         playerUpNextCard: value.playerUpNextCard ?? true,
         fullscreenChannelPanel: value.fullscreenChannelPanel ?? true,
@@ -201,6 +228,9 @@ export function createSettingsFromFormValue(
         showExternalPlaybackBar: value.showExternalPlaybackBar ?? true,
         stripCountryPrefix: value.stripCountryPrefix ?? false,
         theme: value.theme ?? Theme.SystemTheme,
+        themeAccent: normalizeThemeAccent(value.themeAccent),
+        systemLightTheme: normalizeSystemTheme(value.systemLightTheme, 'light'),
+        systemDarkTheme: normalizeSystemTheme(value.systemDarkTheme, 'dark'),
         mpvPlayerPath: normalizeExternalPlayerPath(value.mpvPlayerPath),
         mpvPlayerArguments: normalizeExternalPlayerArguments(
             value.mpvPlayerArguments
@@ -223,6 +253,7 @@ export function createSettingsFromFormValue(
         portalConnectivityGuard: value.portalConnectivityGuard !== false,
         coverSize: value.coverSize ?? 'medium',
         showCoverTitles: value.showCoverTitles !== false,
+        epgEnabled: value.epgEnabled ?? currentSettings.epgEnabled ?? true,
         epgUrl,
         preferUploadedEpgOverXtream:
             value.preferUploadedEpgOverXtream ??

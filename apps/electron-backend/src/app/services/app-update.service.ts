@@ -173,6 +173,7 @@ export class AppUpdateService {
     private channel: AppUpdateChannel;
     private checkForUpdatesPromise: Promise<ElectronBridgeAppUpdateStatus> | null =
         null;
+    private recheckAfterCurrent = false;
     private status: ElectronBridgeAppUpdateStatus;
     /** True between prepareQuit() and the quit — or the error that voids it. */
     private quitPreparationPending = false;
@@ -222,7 +223,7 @@ export class AppUpdateService {
     /**
      * Follows a saved channel change. A download already running or
      * finished belongs to the previous channel and is left alone — the
-     * user can still install it — so only an idle updater re-checks.
+     * user can still install it. An active check re-runs once it settles.
      * `verdictChannel` keeps naming the channel that download came from
      * until a check on the new channel replaces it.
      */
@@ -244,35 +245,45 @@ export class AppUpdateService {
             return;
         }
 
+        this.recheckAfterCurrent = this.checkForUpdatesPromise !== null;
         // The last verdict described the other channel's releases.
         this.setStatus({ latestVersion: undefined, release: undefined });
         void this.checkForUpdates();
     }
 
-    async checkForUpdates(): Promise<ElectronBridgeAppUpdateStatus> {
-        if (this.checkForUpdatesPromise) {
-            return this.checkForUpdatesPromise;
-        }
-
-        this.checkForUpdatesPromise = this.runCheckForUpdates().finally(() => {
-            this.checkForUpdatesPromise = null;
-        });
-
-        return this.checkForUpdatesPromise;
+    checkForUpdates(): Promise<ElectronBridgeAppUpdateStatus> {
+        return (this.checkForUpdatesPromise ??= this.runCheckForUpdates());
     }
 
     private async runCheckForUpdates(): Promise<ElectronBridgeAppUpdateStatus> {
+        try {
+            do {
+                this.recheckAfterCurrent = false;
+                await this.checkSavedChannel();
+            } while (this.recheckAfterCurrent);
+            return this.getStatus();
+        } finally {
+            this.checkForUpdatesPromise = null;
+        }
+    }
+
+    private async checkSavedChannel(): Promise<void> {
         if (!this.isPackaged) {
             this.setStatus({
                 status: ELECTRON_BRIDGE_APP_UPDATE_STATUSES.Unsupported,
             });
-            return this.getStatus();
+            return;
         }
 
+        const keepRelease =
+            this.status.status !==
+                ELECTRON_BRIDGE_APP_UPDATE_STATUSES.NotAvailable &&
+            (!this.status.verdictChannel ||
+                this.status.verdictChannel === this.channel);
         this.setStatus({
             error: undefined,
-            latestVersion: undefined,
-            release: undefined,
+            latestVersion: keepRelease ? this.status.latestVersion : undefined,
+            release: keepRelease ? this.status.release : undefined,
             status: ELECTRON_BRIDGE_APP_UPDATE_STATUSES.Checking,
             verdictChannel: this.channel,
         });
@@ -287,8 +298,6 @@ export class AppUpdateService {
         } catch (error) {
             this.handleError(error);
         }
-
-        return this.getStatus();
     }
 
     async checkForUpdatesOnStartup(): Promise<ElectronBridgeAppUpdateStatus> {
@@ -337,6 +346,7 @@ export class AppUpdateService {
     installUpdate(): ElectronBridgeAppUpdateStatus {
         if (
             this.updater &&
+            !this.quitPreparationPending &&
             this.status.status ===
                 ELECTRON_BRIDGE_APP_UPDATE_STATUSES.Downloaded
         ) {
@@ -359,6 +369,7 @@ export class AppUpdateService {
     }
 
     handleUpdateAvailable(info: AppUpdateInfo): void {
+        if (this.recheckAfterCurrent) return;
         const release = toRelease(info);
 
         this.catalogs.clear();
@@ -372,6 +383,7 @@ export class AppUpdateService {
     }
 
     handleUpdateNotAvailable(info: AppUpdateInfo): void {
+        if (this.recheckAfterCurrent) return;
         this.setStatus({
             error: undefined,
             latestVersion: info.version,
@@ -451,9 +463,12 @@ export class AppUpdateService {
      */
     private async checkGitHubReleaseForManualUpdate(): Promise<void> {
         const latestRelease = await this.catalogs.latestRelease(this.channel);
+        if (this.recheckAfterCurrent) return;
 
         if (!latestRelease) {
             this.setStatus({
+                latestVersion: undefined,
+                release: undefined,
                 status: ELECTRON_BRIDGE_APP_UPDATE_STATUSES.NotAvailable,
             });
             return;

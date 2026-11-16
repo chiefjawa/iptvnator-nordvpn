@@ -47,6 +47,10 @@ export const KNOWN_ACTIONS = [
     'open-player-subtitles',
     'open-stream-info',
     'open-dashboard',
+    'open-cinematic-dashboard',
+    'open-cinematic-live-dashboard',
+    'open-cinematic-movie',
+    'open-cinematic-series',
     'open-settings',
     'open-xtream-vod',
     'open-xtream-series',
@@ -71,6 +75,9 @@ export const KNOWN_ACTIONS = [
     'open-epg-mapping-dialog',
     'open-settings-tmdb',
     'open-settings-search',
+    'open-settings-appearance',
+    'open-settings-hosted-server',
+    'open-settings-parental-lock',
 ];
 
 /**

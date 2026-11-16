@@ -1,13 +1,10 @@
+import { loadTmdbMatcher } from './tmdb-matcher-loader';
 import { TmdbMediaType } from '@iptvnator/shared/interfaces';
 import { TmdbApiClient, isTmdbNotFound } from './tmdb-api-client';
 import { TmdbClientCache, TmdbClientRuntime } from './tmdb-client-contracts';
 import { trimDetailsForCache } from './tmdb-cache-payload';
 import { TMDB_DETAILS_CACHE_TTL_MS } from './tmdb-config';
-import {
-    assessProviderId,
-    buildDetailsLookupKey,
-    parseProviderTmdbId,
-} from './tmdb-matcher';
+
 import { TmdbIdResolver } from './tmdb-id-resolver';
 import {
     detailsFallbackLanguage,
@@ -56,6 +53,21 @@ export class TmdbMetadataClient {
         return (await this.enrich('tv', query)) as TmdbTvDetails | null;
     }
 
+    /** A user-selected identity bypasses title matching, while retaining opt-in and caching. */
+    async getDetailsForMatch(
+        mediaType: TmdbMediaType,
+        tmdbId: number
+    ): Promise<TmdbDetails | null> {
+        if (!this.isEnabled() || !Number.isInteger(tmdbId) || tmdbId <= 0)
+            return null;
+        try {
+            return await this.getDetails(mediaType, tmdbId);
+        } catch {
+            this.report(`TMDB ${mediaType} manual match unavailable.`);
+            return null;
+        }
+    }
+
     private async enrich(
         mediaType: TmdbMediaType,
         query: TmdbEnrichmentQuery
@@ -65,6 +77,7 @@ export class TmdbMetadataClient {
         }
 
         try {
+            const { parseProviderTmdbId } = await loadTmdbMatcher();
             const providerId = parseProviderTmdbId(query.tmdbId);
             if (
                 providerId !== null &&
@@ -112,6 +125,7 @@ export class TmdbMetadataClient {
         providerId: number,
         query: TmdbEnrichmentQuery
     ): Promise<TmdbDetails | null> {
+        const { assessProviderId } = await loadTmdbMatcher();
         let details: TmdbDetails | null;
         try {
             details = await this.getDetails(mediaType, providerId);
@@ -214,6 +228,7 @@ export class TmdbMetadataClient {
         tmdbId: number,
         language: string
     ): Promise<TmdbDetails | null> {
+        const { buildDetailsLookupKey } = await loadTmdbMatcher();
         const lookupKey = buildDetailsLookupKey(tmdbId);
 
         const cached = await this.cache.get(mediaType, lookupKey, language);

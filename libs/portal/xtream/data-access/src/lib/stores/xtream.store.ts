@@ -1,5 +1,7 @@
-import { computed, inject } from '@angular/core';
-import { signalStore, withComputed, withMethods } from '@ngrx/signals';
+import { observeActivityChanges } from '@iptvnator/services/activity-changes';
+import { DestroyRef } from '@angular/core';
+import { inject } from '@angular/core';
+import { signalStore, withMethods, withHooks } from '@ngrx/signals';
 import {
     XtreamSerieDetails,
     XtreamVodDetails,
@@ -26,11 +28,7 @@ import {
     withTmdbEpisodeMetadata,
 } from './features';
 
-import {
-    applyRecoveredXtreamVodCatalogItem,
-    createXtreamDetailsRequestGuard,
-    resolveXtreamVodDetailsSelection,
-} from './xtream-details-request';
+import { createXtreamDetailsRequestGuard } from './xtream-details-request-guard';
 import { stripXtreamSerieInfoPlaceholders } from './xtream-detail-metadata';
 
 /** Facade composing the Xtream feature stores and cross-feature workflows. */
@@ -48,15 +46,6 @@ export const XtreamStore = signalStore(
     withFavorites(),
     withRecentItems(),
     withTmdbEpisodeMetadata(),
-
-    withComputed((store) => ({
-        /**
-         * Get global recent items (from withRecentItems)
-         */
-        globalRecentItems: computed(() => {
-            return store.recentItems();
-        }),
-    })),
 
     // Cross-feature methods & orchestration
     withMethods((store) => {
@@ -119,7 +108,10 @@ export const XtreamStore = signalStore(
              * Initialize the store for a playlist
              */
             async initialize(): Promise<void> {
-                await store.fetchPlaylist();
+                await Promise.all([
+                    store.fetchPlaylist(),
+                    store.prepareRecentActions(),
+                ]);
                 await store.checkPortalStatus();
                 await store.initializeContent();
                 const playlist = store.currentPlaylist();
@@ -160,7 +152,15 @@ export const XtreamStore = signalStore(
                 store.setSelectedItem(null);
                 xtreamApiService
                     .getVodInfo(credentials, params.vodId)
-                    .then((vodDetails: XtreamVodDetails) => {
+                    .then(async (vodDetails: XtreamVodDetails) => {
+                        if (!isCurrentRequest()) return;
+
+                        const {
+                            resolveXtreamVodDetailsSelection,
+                            applyRecoveredXtreamVodCatalogItem,
+                        } = await import('./xtream-details-request');
+                        // Cancellation, a newer detail or another playlist can
+                        // take ownership while the detail chunk is loading.
                         if (!isCurrentRequest()) return;
 
                         const { recovery, selection } =
@@ -365,7 +365,18 @@ export const XtreamStore = signalStore(
                 );
             },
         };
-    })
+    }),
+    withHooks((store) => ({
+        onInit() {
+            inject(DestroyRef).onDestroy(
+                observeActivityChanges(() => {
+                    const id = store.currentPlaylist()?.id;
+                    if (id)
+                        void store.loadAllPositions(id).catch(() => undefined);
+                })
+            );
+        },
+    }))
 );
 
 // Type alias for the store

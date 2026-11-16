@@ -17,9 +17,11 @@ const archive = {
             exportedId: 'audit-m3u',
             title: 'Audit M3U 🎬',
             autoRefresh: false,
+            manualEpgUrls: ['https://example.test/selected.xml'],
+            disabledEpgUrls: ['https://example.test/disabled.xml'],
             source: {
                 kind: 'text',
-                rawM3u: '#EXTM3U\n#EXTINF:-1 group-title=" News ",Test Channel\nhttps://example.test/live',
+                rawM3u: '#EXTM3U x-tvg-url="https://example.test/selected.xml,https://example.test/disabled.xml"\n#EXTINF:-1 group-title=" News ",Test Channel\nhttps://example.test/live',
             },
             userState: {
                 favorites: ['https://example.test/live'],
@@ -94,7 +96,9 @@ async function importJson(
     await page
         .locator('#backup')
         .getByRole('button', { name: 'Import', exact: true })
-        .click();
+        // Exercise keyboard focus restoration; WebKit mouse clicks need not
+        // focus a button before the file chooser opens.
+        .press('Enter');
     await (
         await chooser
     ).setFiles({
@@ -129,6 +133,11 @@ async function exportJson(page: Page) {
     return result;
 }
 const result = (page: Page) => page.locator('#backup .backup-result');
+// macOS WebKit's default Tab mode skips buttons; Option+Tab includes them.
+const nextControlKey = (browserName: string) =>
+    process.platform === 'darwin' && browserName === 'webkit'
+        ? 'Alt+Tab'
+        : 'Tab';
 
 test.beforeEach(async ({ page }) => {
     await page.goto('/workspace/settings/backup');
@@ -155,6 +164,9 @@ test('@critical @persistence @settings @pwa backup round-trip preserves supporte
         if ('connection' in input)
             expect(exported.connection).toEqual(input.connection);
         if (input.portalType === 'm3u') {
+            expect(exported.autoImportEpg).toBe(true);
+            expect(exported.manualEpgUrls).toEqual(input.manualEpgUrls);
+            expect(exported.disabledEpgUrls).toEqual(input.disabledEpgUrls);
             expect(exported.source.rawM3u.replace(/\r\n?/g, '\n')).toEqual(
                 input.source?.rawM3u
             );
@@ -168,6 +180,24 @@ test('@critical @persistence @settings @pwa backup round-trip preserves supporte
                 }),
             ]);
     }
+    const optedOut = structuredClone(first);
+    optedOut.playlists.find(
+        (entry: { portalType: string }) => entry.portalType === 'm3u'
+    ).autoImportEpg = false;
+    await importJson(page, optedOut);
+    await expect(result(page)).toContainText('3 merged');
+    expect(
+        (await exportJson(page)).playlists.find(
+            (entry: { portalType: string }) => entry.portalType === 'm3u'
+        ).autoImportEpg
+    ).toBe(false);
+    await importJson(page, first);
+    await expect(result(page)).toContainText('3 merged');
+    expect(
+        (await exportJson(page)).playlists.find(
+            (entry: { portalType: string }) => entry.portalType === 'm3u'
+        ).autoImportEpg
+    ).toBe(true);
     const empty = structuredClone(first);
     for (const entry of empty.playlists) {
         entry.userState.favorites = [];
@@ -219,8 +249,44 @@ test('@critical @persistence @settings @pwa damaged and unsupported files preser
     }
 });
 
+test('@persistence @pwa backup keeps unknown-origin enabled guides through export, merge and reload', async ({
+    page,
+}) => {
+    const guide = 'https://guide.example.test/unknown-origin.xml';
+    await importJson(page, {
+        ...archive,
+        playlists: [
+            {
+                ...archive.playlists[0],
+                title: 'Synthetic unknown-origin backup',
+                epgUrls: [guide],
+                manualEpgUrls: [],
+                disabledEpgUrls: [],
+                source: {
+                    kind: 'text',
+                    rawM3u: '#EXTM3U\n#EXTINF:-1,Synthetic channel\nhttps://example.test/live',
+                },
+            },
+        ],
+    });
+    await expect(result(page)).toContainText('1 imported');
+    const exported = await exportJson(page);
+    expect(exported.playlists[0]).toMatchObject({
+        epgUrls: [guide],
+        manualEpgUrls: [],
+        disabledEpgUrls: [],
+    });
+    expect(exported.playlists[0].source.rawM3u).not.toContain(guide);
+    await importJson(page, exported);
+    await expect(result(page)).toContainText('1 merged');
+    await page.reload();
+    await expect(page.locator('#backup')).toBeVisible();
+    expect(await exportJson(page)).toEqual(exported);
+});
+
 test('@settings @pwa cancelled chooser and a slow file read release busy and prevent conflicting actions', async ({
     page,
+    browserName,
 }) => {
     await importJson(page, archive);
     await expect(result(page)).toContainText('3 imported');
@@ -229,6 +295,7 @@ test('@settings @pwa cancelled chooser and a slow file read release busy and pre
     const importButton = page
         .locator('#backup')
         .getByRole('button', { name: 'Import', exact: true });
+    await importButton.focus();
     await importButton.click();
     await (await chooser).setFiles([]);
     await expect(importButton).toBeEnabled();
@@ -264,7 +331,7 @@ test('@settings @pwa cancelled chooser and a slow file read release busy and pre
     await expect(result(page)).toContainText('3 merged');
     await expect(importButton).toBeEnabled();
     await expect(importButton).toBeFocused();
-    await page.keyboard.press('Tab');
+    await page.keyboard.press(nextControlKey(browserName));
     await expect(
         page
             .locator('#backup')
@@ -280,13 +347,17 @@ for (const theme of ['light', 'dark']) {
     ]) {
         test(`@settings @pwa backup result fits ${theme} ${variant.locale} at ${variant.width}px`, async ({
             page,
+            browserName,
         }, testInfo) => {
             // Set real preferences through the settings controls, then use the shipped translations.
-            await page.goto('/workspace/settings/general');
+            await page.goto('/workspace/settings/appearance');
             await page
                 .locator(
                     `[data-test-id="select-theme"] [data-test-id="${theme.toUpperCase()}_THEME"]`
                 )
+                .click();
+            await page
+                .locator('[data-test-id="settings-section-general"]')
                 .click();
             await page.locator('[data-test-id="select-language"]').click();
             await page
@@ -358,7 +429,7 @@ for (const theme of ['light', 'dark']) {
                 );
             }
             await importButton.focus();
-            await page.keyboard.press('Tab');
+            await page.keyboard.press(nextControlKey(browserName));
             await expect(
                 page.locator('#backup .inline-actions__button').nth(1)
             ).toBeFocused();
@@ -374,6 +445,54 @@ for (const theme of ['light', 'dark']) {
         });
     }
 }
+
+test('@persistence @settings @pwa a partial restore preserves distinct sources with the same exported ID', async ({
+    page,
+}) => {
+    await page.evaluate(() => {
+        const original = Storage.prototype.setItem;
+        let failOnce = true;
+        Storage.prototype.setItem = function (key, value) {
+            if (key === 'xtream-favorites' && failOnce) {
+                failOnce = false;
+                throw new DOMException(
+                    'Synthetic quota failure',
+                    'QuotaExceededError'
+                );
+            }
+            return original.call(this, key, value);
+        };
+    });
+    const template = archive.playlists[2];
+    const titles = ['Synthetic restore A', 'Synthetic restore B'];
+    await importJson(page, {
+        ...archive,
+        playlists: titles.map((title, index) => ({
+            ...template,
+            exportedId: 'shared-synthetic-id',
+            title,
+            connection: {
+                ...template.connection,
+                username: `synthetic-${index}`,
+            },
+        })),
+    });
+    await expect(result(page)).toContainText('1 imported');
+    await expect(result(page)).toContainText('1 failed');
+    await page.reload();
+    await expect(page.locator('#backup')).toBeVisible();
+    const exported = await exportJson(page);
+    expect(
+        exported.playlists.map((entry: { title: string }) => entry.title).sort()
+    ).toEqual(titles);
+    expect(
+        new Set(
+            exported.playlists.map(
+                (entry: { exportedId: string }) => entry.exportedId
+            )
+        ).size
+    ).toBe(2);
+});
 
 test('@critical @persistence @settings @pwa a quota failure reports partial restore and remains retryable', async ({
     page,

@@ -4,6 +4,7 @@ import {
     expect,
     launchElectronApp,
     closeElectronApp,
+    openSettingsSection,
 } from './electron-test-fixtures';
 
 async function setSourceReadFailure(app: ElectronApplication, failed: boolean) {
@@ -109,7 +110,9 @@ test('recovers settings and updates from a failed source read @electron @setting
             Menu.getApplicationMenu()!.getMenuItemById('app-settings')!.click();
         });
         await expect(page).toHaveURL(/\/workspace\/settings\/general/);
-        await page.getByRole('radio', { name: 'Dark', exact: true }).click();
+        await openSettingsSection(page, 'appearance');
+        const theme = page.getByTestId('select-theme');
+        await theme.getByRole('radio', { name: 'Dark', exact: true }).click();
         await page.getByTestId('save-settings').click();
         await expect(page.getByTestId('save-settings')).toBeHidden();
         await page.evaluate(() => {
@@ -125,7 +128,8 @@ test('recovers settings and updates from a failed source read @electron @setting
             page.getByRole('button', { name: 'Open settings', exact: true })
         ).toBeVisible();
         await page.getByTestId('startup-open-settings').click();
-        await page.getByRole('radio', { name: 'Light', exact: true }).click();
+        await openSettingsSection(page, 'appearance');
+        await theme.getByRole('radio', { name: 'Light', exact: true }).click();
         await page.getByTestId('save-settings').click();
         await expect(page.getByTestId('save-settings')).toBeHidden();
         await page.evaluate(() => {

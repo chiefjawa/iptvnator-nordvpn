@@ -107,8 +107,13 @@ test('withholds native import credentials after an instance mismatch and verifie
     const directory = mkdtempSync(join(tmpdir(), 'iptvnator-sync-identity-'));
     const token = 'synthetic-native-token';
     let identity = 'original';
+    let offline = false;
     const replacementRequests: { path: string; secret: boolean }[] = [];
     const server = createServer(async (request, response) => {
+        if (offline) {
+            response.destroy();
+            return;
+        }
         const chunks: Buffer[] = [];
         for await (const chunk of request) chunks.push(Buffer.from(chunk));
         const body = Buffer.concat(chunks).toString();
@@ -158,20 +163,25 @@ test('withholds native import credentials after an instance mismatch and verifie
         );
         desktop = await launchElectronApp(directory);
         const page = desktop.mainWindow;
-        const refresh = page
-            .getByTestId('source-sync-status')
-            .getByRole('button', { name: 'Refresh', exact: true });
-        await expect(refresh).toBeVisible();
-        await page.evaluate(
-            async ({ apiUrl, token }) => {
-                const configure = window.electron.sourceSyncConfigure;
-                if (!configure)
-                    throw new Error('Missing source connection bridge');
-                await configure(apiUrl, token, false);
-            },
-            { apiUrl, token }
-        );
-        await refresh.click();
+        const status = page.getByTestId('source-sync-status');
+        const settings = status.getByRole('link', {
+            name: 'Open server settings',
+        });
+        await expect(settings).toBeVisible();
+        offline = true;
+        await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+        await expect(status).toContainText('Server unavailable');
+        const retry = status.getByRole('button', { name: 'Retry connection' });
+        await expect(retry).toBeVisible();
+        await expect(settings).toHaveCount(0);
+        await expect(status).not.toContainText('token');
+        await expect(status.locator('input')).toHaveCount(0);
+        offline = false;
+        await retry.click();
+        await settings.press('Enter');
+        await page.getByTestId('source-server-token').fill(token);
+        await page.getByTestId('source-server-connect').click();
+        await expect(status).toHaveCount(0);
         await openSources(page);
         const send = (request: SourceServerRequest) =>
             page.evaluate((request) => {
@@ -285,9 +295,29 @@ for (const failReceipt of [false, true]) {
             desktop = await launchElectronApp(directory);
             const page = desktop.mainWindow;
             if (failReceipt) {
+                const notice = page.getByTestId('source-sync-status');
+                await expect(notice).toContainText('Server unavailable');
                 await expect(
-                    page.getByTestId('source-sync-status')
-                ).toContainText('Server unavailable');
+                    notice.getByRole('button', { name: /hide server notice/i })
+                ).toHaveCount(0);
+                await notice.getByRole('link', { name: 'Server' }).click();
+                await expect(
+                    page.getByTestId('source-server-connect')
+                ).toBeVisible();
+                await expect(
+                    page.getByTestId('settings-section-about')
+                ).toBeInViewport({
+                    ratio: 1,
+                });
+                await expect(
+                    page.getByRole('link', { name: 'Open settings' })
+                ).toBeInViewport({ ratio: 1 });
+                expect(
+                    await page.evaluate(() => {
+                        const root = document.documentElement;
+                        return root.scrollHeight - root.clientHeight;
+                    })
+                ).toBe(0);
                 await setSourceStateWriteFailure(
                     desktop.electronApp,
                     directory,
@@ -295,9 +325,11 @@ for (const failReceipt of [false, true]) {
                     false,
                     'source-sync-initialized'
                 );
-                await page
-                    .getByTestId('source-sync-status')
-                    .getByRole('button', { name: 'Refresh', exact: true })
+                await notice
+                    .getByRole('button', {
+                        name: 'Retry connection',
+                        exact: true,
+                    })
                     .click();
             }
             await expect(page.getByTestId('source-sync-status')).toHaveCount(
@@ -334,8 +366,8 @@ test('shares source changes between independent PWA and Electron clients @critic
     browser,
 }) => {
     const server = await startSourceSyncServer();
-    const context = await browser.newContext();
-    const second = await browser.newContext();
+    const context = await browser.newContext({ serviceWorkers: 'block' });
+    const second = await browser.newContext({ serviceWorkers: 'block' });
     const desktopDir = mkdtempSync(join(tmpdir(), 'iptvnator-sync-desktop-'));
     let desktop: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
     try {
@@ -531,12 +563,68 @@ test('restores the original Electron library after disconnect despite an inherit
     }
 });
 
+test('hides the Electron server outage until restart without leaving the shared library @electron @m3u', async () => {
+    const server = await startSourceSyncServer();
+    const directory = mkdtempSync(
+        join(tmpdir(), 'iptvnator-sync-hide-notice-')
+    );
+    let desktop: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
+    try {
+        const { instanceId } = await (
+            await fetch(`${server.apiUrl}/v1/instance`)
+        ).json();
+        writeFileSync(
+            join(directory, 'source-server.json'),
+            JSON.stringify({ apiUrl: server.apiUrl, instanceId })
+        );
+        desktop = await launchElectronApp(directory);
+        const page = desktop.mainWindow;
+        await openSources(page);
+        await addTextSource(page, 'Synthetic offline source');
+        await openSources(page);
+        const source = page
+            .getByText('Synthetic offline source', {
+                exact: true,
+            })
+            .first();
+        await expect(source).toBeVisible();
+        await server.close();
+        await page.evaluate(() => window.dispatchEvent(new Event('online')));
+        const notice = page.getByTestId('source-sync-status');
+        await expect(notice).toContainText('Saved sources are available.');
+        await notice
+            .getByRole('button', {
+                name: 'Hide server notice until next launch',
+            })
+            .press('Enter');
+        await expect(notice).toHaveCount(0);
+        await expect(page.getByRole('main')).toBeFocused();
+        await expect(source).toBeVisible();
+        await closeElectronApp(desktop);
+        desktop = undefined;
+        desktop = await launchElectronApp(directory);
+        await openSources(desktop.mainWindow);
+        await expect(
+            desktop.mainWindow.getByTestId('source-sync-status')
+        ).toContainText('Saved sources are available.');
+        await expect(
+            desktop.mainWindow
+                .getByText('Synthetic offline source', { exact: true })
+                .first()
+        ).toBeVisible();
+    } finally {
+        if (desktop) await closeElectronApp(desktop);
+        await server.close();
+        rmSync(directory, { recursive: true, force: true });
+    }
+});
+
 test('authenticates the PWA and retains its isolated source cache while NAS is offline @web @m3u', async ({
     browser,
 }) => {
     const token = 'synthetic-instance-token';
     const server = await startSourceSyncServer(token);
-    const context = await browser.newContext();
+    const context = await browser.newContext({ serviceWorkers: 'block' });
     try {
         const page = await context.newPage();
         await page.route('**/assets/app-config.js', (route) =>
@@ -546,11 +634,29 @@ test('authenticates the PWA and retains its isolated source cache while NAS is o
             })
         );
         await page.goto(`${frontendUrl}/workspace/sources`);
-        const status = page.locator('app-source-sync-status');
-        await status.getByLabel('Access token (optional)').fill(token);
-        await status
-            .getByRole('button', { name: 'Refresh', exact: true })
-            .click();
+        const status = page.getByTestId('source-sync-status');
+        const settings = status.getByRole('link', {
+            name: 'Open server settings',
+        });
+        await expect(settings).toBeVisible();
+        const discovery = `${server.apiUrl}/v1/instance`;
+        await page.route(discovery, (route) =>
+            route.abort('connectionrefused')
+        );
+        await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+        await expect(status).toContainText('Server unavailable');
+        const retry = status.getByRole('button', { name: 'Retry connection' });
+        await expect(retry).toBeVisible();
+        await expect(settings).toHaveCount(0);
+        await expect(status).not.toContainText('token');
+        await expect(status.locator('input')).toHaveCount(0);
+        await page.unroute(discovery);
+        await retry.click();
+        await settings.click();
+        await page.getByTestId('source-server-token').fill(token);
+        await page.getByTestId('source-server-connect').click();
+        await expect(status).toHaveCount(0);
+        await openSources(page);
         await expect(
             page.getByRole('button', { name: 'Add playlist', exact: true })
         ).toBeVisible();
@@ -583,12 +689,36 @@ test('authenticates the PWA and retains its isolated source cache while NAS is o
         });
         await server.close();
         await page.reload();
-        await expect(status).toContainText('Server unavailable', {
+        const notice = page.getByTestId('source-sync-status');
+        await expect(notice).toContainText('Saved sources are available.', {
             timeout: 25000,
         });
-        await expect(
-            page.getByText('Authenticated NAS source', { exact: true }).first()
-        ).toBeVisible();
+        await expect(retry).toBeVisible();
+        await expect(settings).toHaveCount(0);
+        await expect(notice).not.toContainText('token');
+        const source = page
+            .getByText('Authenticated NAS source', { exact: true })
+            .first();
+        await expect(source).toBeVisible();
+        await notice
+            .getByRole('button', {
+                name: 'Hide server notice until next launch',
+            })
+            .click();
+        await expect(notice).toHaveCount(0);
+        await openSettings(page);
+        await openSettingsSection(page, 'server');
+        await page.getByRole('button', { name: 'Check connection' }).click();
+        await expect(page.getByTestId('source-server-refresh')).toBeEnabled();
+        await expect(page.getByTestId('source-server-state')).toContainText(
+            'Server unavailable'
+        );
+        await expect(notice).toHaveCount(0);
+        await openSources(page);
+        await expect(source).toBeVisible();
+        await page.reload();
+        await expect(notice).toContainText('Saved sources are available.');
+        await expect(source).toBeVisible();
     } finally {
         await context.close();
         await server.close();
@@ -601,7 +731,7 @@ test('opens shared Xtream and Stalker sources on PWA and independent Electron pr
 }, testInfo) => {
     await resetMockServers(request, ['xtream', 'stalker']);
     const server = await startSourceSyncServer();
-    const context = await browser.newContext();
+    const context = await browser.newContext({ serviceWorkers: 'block' });
     const directories = [
         mkdtempSync(join(tmpdir(), 'iptvnator-sync-provider-')),
         mkdtempSync(join(tmpdir(), 'iptvnator-sync-replica-')),
@@ -739,7 +869,7 @@ test('imports original browser sources once and returns to the preserved local l
     browser,
 }) => {
     const server = await startSourceSyncServer();
-    const context = await browser.newContext();
+    const context = await browser.newContext({ serviceWorkers: 'block' });
     try {
         const page = await context.newPage();
         await page.route('**/assets/app-config.js', (route) =>

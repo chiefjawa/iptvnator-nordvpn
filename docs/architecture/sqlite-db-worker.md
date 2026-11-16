@@ -278,6 +278,26 @@ same with and without profiling. `DB_GLOBAL_SEARCH` is deliberately not
 instrumented: it interleaves queries and ranking across sources, so these
 single-query phases would be misleading.
 
+### Shared history sidecar
+
+`DB_HISTORY_LOCAL` is a fixed read/compare-and-swap request, verified against the
+selected instance in main and validated again in the worker. Its additive history
+sidecar stores the projection, local-only choices and pending operations together.
+It does not write the legacy recently-viewed table or its recovery journal.
+Expected serialized bytes are captured before invoking renderer mutation logic.
+
+### Cache history recovery
+
+The internal `xtream-history-recovery:` keys in `app_state` register Xtream cache
+recovery through `DB_SET_APP_STATE`. Registration atomically captures live history
+and newly available archived entries. Native history mutations update that journal
+in their own transactions, including removal tombstones and explicit clears.
+`DB_RESTORE_XTREAM_USER_DATA` replays the current journal in one transaction so a
+watch or removal cannot be overwritten between replay chunks. This transaction
+contains saved history only; catalog writes keep the row budgets below. The
+renderer acknowledges the journal after deferred state completes, and source
+deletion removes its journal. Explicit backup import resets it before replay.
+
 ### Catalog write batching
 
 Catalog deletes and inserts commit in row-budgeted transactions rather than
@@ -312,6 +332,12 @@ the main-process and EPG-worker connections give up after their 5 s
   an `XtreamContentValue` supplies, 1,100 parameters per statement; a whole
   5,000-row commit in one statement would pass SQLite's 32,766 limit) and
   wrap fifty of them in one transaction.
+- Category imports use at most 1,000 rows per `INSERT` to stay below SQLite's
+  bound-parameter limit. All statements remain in one transaction, preserving
+  provider order and rolling back earlier batches if a later batch fails.
+- A cold content save persists its type's `importing` marker before committing
+  any content rows. Failure to persist the marker prevents all content writes;
+  only the import owner records completion after the save succeeds.
 - For deletes, progress `current` is the sum of the `changes` SQLite reports
   and `total` is the summed pre-count. For inserts, `current` counts the rows
   handed to `INSERT ... ON CONFLICT DO NOTHING` and `total` is the number of
@@ -410,7 +436,8 @@ Current shipped operation names:
 All five are tracked. Save content, delete Xtream content, restore Xtream user
 data, and delete playlist are cancellable. Delete all playlists deliberately
 uses `cancellable: false`: its renderer-visible progress is tracked, but a
-cancel request does not interrupt it.
+cancel request does not interrupt it. Like a single source delete, it leaves
+the `downloads` table and its archive-finalization proofs alone.
 
 The event is forwarded to the renderer as `DB_OPERATION_EVENT`.
 
@@ -449,6 +476,23 @@ lifecycle, only the terminal
 separate cancel-requested flag immediately so the cancel action cannot be
 clicked twice while it waits for the authoritative terminal event.
 
+A cancelled source delete (`delete-playlist`) keeps the source, so the order
+of its commits is chosen for what a cancel leaves behind
+(`playlist-delete.operations.ts`). Before the first catalog commit it records
+favorite identity evidence and sets `xtream-import-status:*` to `importing`
+for every type that has categories, keyed or not (a catalog imported before
+the keys existed reads as `idle`, a usable cache). That is the marker an
+interrupted import leaves, so the next startup's bootstrap clears and
+re-imports a partly deleted catalog instead of showing it as complete; until
+then the running renderer keeps the catalog it already loaded. Content then goes in row-budgeted
+category groups, then the categories. Favorites, playback positions, the
+remaining history and the playlist row are deleted together in one final
+transaction after the last checkpoint. Favorites survive their content with
+`content_id` NULL and are linked again when the re-import completes;
+positions are keyed by provider IDs. Recently viewed rows cascade with their
+content, so a cancelled source loses its watch history, as an interrupted
+import does; keeping it would need the refresh flow's pending-restore record.
+
 With the exact `IPTVNATOR_PERF_WORKER_PROFILING=1` opt-in, receipt of a cancel
 for a correlated active request also emits a
 `performance-cancel-received` worker diagnostic containing only safe
@@ -485,6 +529,17 @@ connections are opened unchanged. See
 
 The preload bridge keeps the existing database methods but adds scoped worker
 events.
+
+Preload subscriptions forward renderer payloads without exposing the privileged
+Electron IPC event. Each returned unsubscribe function removes only its own
+listener. The legacy import-progress cleanup removes its registered progress
+listeners while retaining modern `onDbOperationEvent` observers on the shared
+channel, including across repeated cleanup and resubscription.
+
+`apps/electron-backend/src/app/api/main.preload.lifecycle.spec.ts` verifies
+subscription ownership, payload-only callbacks, legacy progress filtering,
+preservation of failed results and IPC rejections, and independent cancellation
+acknowledgement/import settlement, with renderer tracing both on and off.
 
 ### Important preload APIs
 
@@ -689,6 +744,19 @@ lookup behavior when evidence is omitted. Favorite status/actions use the select
 internal row ID consistently. Import completion reconciles links and saved
 metadata; detail enrichment also updates the snapshot. Known identity conflicts
 remain unresolved. See [Xtream compatibility](./xtream-portal-compatibility.md#durable-electron-favorites).
+
+The lookup returns the catalog row's `tmdb_id` and `release_year` with its
+title and poster. Synchronized Xtream history uses those returned fields to
+confirm the match before showing the catalog title and artwork.
+
+The lookup also accepts an optional local `categoryId` restriction, independent
+of TMDB/year evidence. Cold detail Back uses it to verify route membership before
+recovering another category; duplicate typed provider IDs retain their original
+category context. Omitting the selector preserves existing lookup behavior.
+The optional `excludeLocked` flag is forwarded through the same IPC chain for
+shared-favorite projection. It applies the worker's category-lock condition before
+choosing a duplicate. Omitted flags preserve raw lookups used by the PIN guard.
+The renderer also rejects unreadable or changed lock state around these reads.
 
 `DB_RESTORE_XTREAM_FAVORITES` materializes pending/backup snapshots without an
 online catalog. Inserts and their replay receipt share one synchronous worker
@@ -973,6 +1041,18 @@ regression tests explicitly assert `.run()` is used and `.execute()` is not.
 
 ### Unit coverage added
 
+`libs/services/src/lib/database-electron.operations.spec.ts` covers concurrent
+renderer operation isolation, cancellation acknowledgement versus completion,
+modern/legacy progress listener cleanup on success and failure, failed-delete
+results, restore payload preservation, and cancellation capability guards.
+
+`apps/electron-backend/src/app/workers/database-worker-operation-lifecycle.spec.ts`
+covers request/operation correlation across concurrent imports, cancellation of
+one operation without cancelling another, progress flush before error events,
+error serialization and subsequent requests, and non-cancellable delete-all.
+These protocol tests mock SQL operations; historical migration, durable
+favorites and packaged-worker tests remain the real SQLite persistence checks.
+
 `apps/electron-backend/src/app/services/database-worker-client.spec.ts`
 covers:
 
@@ -982,6 +1062,8 @@ covers:
 4. `AbortError` propagation for cancelled work
 5. cancel message routing to the live worker
 6. worker exit recovery and fresh worker startup
+7. stale message/error/exit events cannot change a replacement worker's state;
+   shutdown rejects requests still waiting for readiness
 
 `apps/electron-backend/src/app/events/epg.events.spec.ts` covers:
 
@@ -1141,3 +1223,15 @@ When adding another heavy SQLite operation:
 6. Reuse existing preload/service APIs where possible instead of creating a new
    renderer-facing contract.
 7. Re-run the worker unit test and at least one Electron runtime smoke.
+
+
+### Optional favorites projection
+
+`DB_FAVORITES_LOCAL` follows the fixed local CAS protocol used by activity, with
+independent favorite record types and tables. The main handler verifies the
+selected source-server instance before dispatch; only the worker opens SQLite.
+Projection and pending membership operations commit in one synchronous SQLite
+transaction. Renderer retries preserve sibling-window changes and recheck the
+captured consent/source ownership. No callback, SQL or media address crosses this
+bridge. The worker bundler explicitly maps the favorites secondary entries before
+the parent interface/database aliases.

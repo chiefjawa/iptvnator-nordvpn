@@ -58,6 +58,21 @@ const debugAppComponent = createDevLogger('AppComponent');
 @Component({
     selector: 'app-root',
     templateUrl: './app.component.html',
+    styles: `
+        :host {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+        .app-viewport {
+            flex: 1;
+            min-height: 0;
+            overflow: auto;
+        }
+        .app-route {
+            height: 100%;
+        }
+    `,
     changeDetection: ChangeDetectionStrategy.OnPush,
     imports: [
         AppStartupStatusComponent,
@@ -70,6 +85,9 @@ const debugAppComponent = createDevLogger('AppComponent');
 })
 export class AppComponent implements OnInit {
     readonly routeReady = signal(false);
+    get isElectron() {
+        return this.runtime.isElectron;
+    }
     get usesCustomWindowControls() {
         return this.runtime.usesCustomWindowControls;
     }
@@ -101,6 +119,11 @@ export class AppComponent implements OnInit {
     constructor() {
         startAppMenuActions();
         syncDocumentLanguage();
+
+        document.documentElement.classList.toggle(
+            'electron',
+            this.runtime.isElectron
+        );
 
         // Body-level class (like 'dark-theme') so layout adjustments also
         // reach content rendered outside app-root, e.g. cdk-overlay content.
@@ -185,20 +208,22 @@ export class AppComponent implements OnInit {
                     // The switch re-renders every date with the new locale;
                     // its data is a lazy chunk that must be registered first.
                     void this.dateLocales.use(resolvedLang);
-                    // Fetch EPG if URLs are configured (only fetch stale data)
-                    if (
-                        this.epgBridge.supportsImport &&
-                        settings.epgUrl?.length > 0 &&
-                        settings.epgUrl?.some((u) => u !== '')
-                    ) {
-                        this.fetchStaleEpgData(settings.epgUrl);
-                    }
+                    if (this.epgBridge.supportsImport)
+                        void this.fetchStaleEpgData();
 
+                    // System resolves through the saved pair.
+                    this.settingsService.changeSystemThemes(
+                        settings.systemLightTheme,
+                        settings.systemDarkTheme
+                    );
                     if (settings.theme) {
                         this.settingsService.changeTheme(settings.theme);
                     } else {
                         this.detectDarkMode();
                     }
+                    void this.settingsService.changeThemeAccent(
+                        settings.themeAccent
+                    );
                 } else {
                     this.detectDarkMode();
                 }
@@ -224,8 +249,11 @@ export class AppComponent implements OnInit {
      * Fetches EPG data only for URLs that have stale or missing data.
      * Data is considered fresh if updated within the last 12 hours.
      */
-    private async fetchStaleEpgData(urls: string[]): Promise<void> {
+    private async fetchStaleEpgData(): Promise<void> {
         await this.settingsStore.loadSettings();
+        const urls = this.settingsStore.epgUrl();
+        if (urls.length === 0) return;
+
         const revision = this.epgSources.revision();
         const fetchCurrentSources = async (sources: string[]) => {
             await this.epgSources.waitForReconciliation();

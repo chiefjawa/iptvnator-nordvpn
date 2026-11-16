@@ -65,6 +65,21 @@ const vodSourcePin = {
 };
 
 export const workerIpcContractCases: WorkerIpcContractCase[] = [
+    {
+        operation: 'DB_HISTORY_LOCAL',
+        args: [{ instanceId: 'activity-test-instance', operation: 'read' }],
+        payload: { instanceId: 'activity-test-instance', operation: 'read' },
+    },
+    {
+        operation: 'DB_FAVORITES_LOCAL',
+        args: [{ instanceId: 'activity-test-instance', operation: 'pending' }],
+        payload: { instanceId: 'activity-test-instance', operation: 'pending' },
+    },
+    {
+        operation: 'DB_ACTIVITY_LOCAL',
+        args: [{ instanceId: 'activity-test-instance', operation: 'pending' }],
+        payload: { instanceId: 'activity-test-instance', operation: 'pending' },
+    },
     { operation: 'DB_GET_STANDALONE_SOURCES', args: [], payload: {} },
     {
         operation: 'DB_CREATE_PLAYLIST',
@@ -139,9 +154,51 @@ export const workerIpcContractCases: WorkerIpcContractCase[] = [
         payload: { key: 'workspace:last-route' },
     },
     {
+        operation: 'DB_CHECK_XTREAM_CATALOG_CONNECTION',
+        args: [
+            {
+                playlistId: 'p',
+                serverUrl: 'https://synthetic.invalid',
+                username: 'u',
+                password: 'p',
+            },
+        ],
+        payload: {
+            condition: {
+                playlistId: 'p',
+                serverUrl: 'https://synthetic.invalid',
+                username: 'u',
+                password: 'p',
+            },
+        },
+    },
+    {
         operation: 'DB_SET_APP_STATE',
         args: ['workspace:last-route', '/workspace'],
         payload: { key: 'workspace:last-route', value: '/workspace' },
+    },
+    {
+        operation: 'DB_SET_APP_STATE',
+        args: [
+            'xtream-import-status:p:movie',
+            'completed',
+            {
+                playlistId: 'p',
+                serverUrl: 'https://synthetic.invalid',
+                username: 'u',
+                password: 'p',
+            },
+        ],
+        payload: {
+            key: 'xtream-import-status:p:movie',
+            value: 'completed',
+            condition: {
+                playlistId: 'p',
+                serverUrl: 'https://synthetic.invalid',
+                username: 'u',
+                password: 'p',
+            },
+        },
     },
     {
         operation: 'DB_HAS_CATEGORIES',
@@ -173,6 +230,11 @@ export const workerIpcContractCases: WorkerIpcContractCase[] = [
         operation: 'DB_UPDATE_CATEGORY_VISIBILITY',
         args: [categoryIds, true],
         payload: { categoryIds, hidden: true },
+    },
+    {
+        operation: 'DB_UPDATE_CATEGORY_VISIBILITY',
+        args: [categoryIds, false, true],
+        payload: { categoryIds, hidden: false, explicit: true },
     },
     {
         operation: 'DB_SET_CATEGORY_LOCKS',
@@ -212,12 +274,32 @@ export const workerIpcContractCases: WorkerIpcContractCase[] = [
     },
     {
         operation: 'DB_GET_CONTENT_BY_XTREAM_ID',
+        args: [42, playlistId, 'movie', undefined, 8],
+        payload: {
+            xtreamId: 42,
+            playlistId,
+            contentType: 'movie',
+            categoryId: 8,
+        },
+    },
+    {
+        operation: 'DB_GET_CONTENT_BY_XTREAM_ID',
         args: [42, playlistId, 'movie', { tmdbId: 100, releaseYear: 1995 }],
         payload: {
             xtreamId: 42,
             playlistId,
             contentType: 'movie',
             identity: { tmdbId: 100, releaseYear: 1995 },
+        },
+    },
+    {
+        operation: 'DB_GET_CONTENT_BY_XTREAM_ID',
+        args: [42, playlistId, 'movie', undefined, undefined, true],
+        payload: {
+            xtreamId: 42,
+            playlistId,
+            contentType: 'movie',
+            excludeLocked: true,
         },
     },
     {
@@ -333,6 +415,11 @@ export const workerIpcContractCases: WorkerIpcContractCase[] = [
         operation: 'DB_GET_RECENT_ITEMS',
         args: [playlistId],
         payload: { playlistId },
+    },
+    {
+        operation: 'DB_GET_RECENT_ITEMS',
+        args: [playlistId, { all: true }],
+        payload: { playlistId, all: true },
     },
     {
         operation: 'DB_ADD_RECENT_ITEM',

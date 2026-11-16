@@ -1,4 +1,12 @@
-import { signal, WritableSignal } from '@angular/core';
+import {
+    matchesFavoriteById,
+    normalizeStalkerEntityId,
+} from './stalker-favorite-identity';
+export {
+    matchesFavoriteById,
+    normalizeStalkerEntityId,
+} from './stalker-favorite-identity';
+import { DestroyRef, inject, signal, WritableSignal } from '@angular/core';
 import { rxResource } from '@angular/core/rxjs-interop';
 import { Observable } from 'rxjs';
 import { PlaylistsService } from '@iptvnator/services';
@@ -8,6 +16,7 @@ import {
     isStalkerSeriesFlag,
     isStalkerSeriesItem,
     readProviderRating,
+    StalkerPortalItem,
     StalkerVodDetails,
     StalkerVodInfo,
     VodDetailsItem,
@@ -41,7 +50,11 @@ export interface StalkerFavoriteToggleOptions {
         item: Record<string, unknown>,
         onComplete?: () => void
     ) => void;
-    removeFromFavorites: (favoriteId: string, onComplete?: () => void) => void;
+    removeFromFavorites: (
+        favoriteId: string,
+        onComplete?: () => void,
+        context?: StalkerPortalItem
+    ) => void;
     onComplete?: () => void;
 }
 
@@ -71,26 +84,6 @@ export function buildStalkerFavoritePayload(
         cover: data.info?.movie_image,
         added_at: new Date().toISOString(),
     };
-}
-
-export function matchesFavoriteById(
-    favorite: Partial<StalkerFavoriteItem>,
-    itemId: string | number
-): boolean {
-    const expectedId = normalizeStalkerEntityId(itemId);
-    return (
-        normalizeStalkerEntityId(favorite?.id) === expectedId ||
-        normalizeStalkerEntityId(favorite?.movie_id) === expectedId ||
-        normalizeStalkerEntityId(favorite?.stream_id) === expectedId ||
-        normalizeStalkerEntityId(favorite?.series_id) === expectedId
-    );
-}
-
-export function normalizeStalkerEntityId(value: unknown): string {
-    if (value === null || value === undefined) {
-        return '';
-    }
-    return String(value).trim();
 }
 
 /**
@@ -201,6 +194,7 @@ type TmdbEnrichmentKey = Extract<keyof StalkerVodInfo, `tmdb_${string}`>;
  * and a field this list missed would vanish right after enrichment.
  */
 const TMDB_ENRICHMENT_KEYS: Record<TmdbEnrichmentKey, true> = {
+    tmdb_provider_info: true,
     tmdb_id: true,
     tmdb_certifications: true,
     tmdb_cast: true,
@@ -255,8 +249,7 @@ export function buildStalkerSelectedVodItem(
                 ? true
                 : undefined,
         video_id: item.video_id,
-        category_id:
-            typeof item.category_id === 'string' ? item.category_id : undefined,
+        category_id: firstNonBlankStalkerIdText(item.category_id) || undefined,
         info: createStalkerInfo(item),
     };
 }
@@ -294,11 +287,10 @@ export function normalizeStalkerFavoriteItem(
             is_series: normalizedIsSeries ? true : undefined,
             video_id: (item as StalkerVodSource).video_id ?? source.video_id,
             category_id:
-                typeof (item as StalkerVodSource).category_id === 'string'
-                    ? (item as StalkerVodSource).category_id
-                    : typeof source.category_id === 'string'
-                      ? source.category_id
-                      : undefined,
+                firstNonBlankStalkerIdText(
+                    item.category_id,
+                    source.category_id
+                ) || undefined,
         },
     };
 }
@@ -396,10 +388,16 @@ export function createPortalFavoritesResource(
     getPortalId: () => string | undefined,
     getRefreshVersion: () => number
 ) {
+    const changed = signal(0);
+    const refresh = () => changed.update((value) => value + 1);
+    window.addEventListener('iptvnator-favorites-changed', refresh);
+    inject(DestroyRef).onDestroy(() =>
+        window.removeEventListener('iptvnator-favorites-changed', refresh)
+    );
     return createPortalCollectionResource(
         playlistService,
         getPortalId,
-        getRefreshVersion,
+        () => getRefreshVersion() + changed(),
         (service, portalId) => service.getPortalFavorites(portalId)
     );
 }
@@ -434,8 +432,16 @@ export function isSelectedStalkerVodFavorite(
         return false;
     }
 
+    const context = item.data as StalkerPortalItem;
     return (favorites ?? []).some((favorite) =>
-        matchesFavoriteById(favorite, item.data.id)
+        matchesFavoriteById(favorite, item.data.id, {
+            ...item.data,
+            favoriteContentType:
+                String(context.category_id) === 'series' ||
+                context.series_id != null
+                    ? 'series'
+                    : 'vod',
+        })
     );
 }
 
@@ -453,6 +459,10 @@ export function toggleStalkerVodFavorite(
             options.onComplete
         );
     } else {
-        options.removeFromFavorites(event.item.data.id, options.onComplete);
+        options.removeFromFavorites(
+            event.item.data.id,
+            options.onComplete,
+            buildStalkerFavoritePayload(event.item.data) as StalkerPortalItem
+        );
     }
 }

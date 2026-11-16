@@ -1,5 +1,5 @@
-import { protectedVpnSession } from '../services/linux-vpn-session';
-import { spawn } from 'child_process';
+import { vpnReuse } from './external-player-vpn-guard';
+import type { ChildProcess } from 'child_process';
 import {
     ExternalPlayerSession,
     PlayerContentInfo,
@@ -13,6 +13,7 @@ import {
 } from '../services/store.service';
 import {
     buildExternalPlayerSpawnSpec,
+    buildFreshMpvArgs,
     buildPlayerArgsWithCustomArguments,
     getDefaultMpvPath,
     isRunningInFlatpak,
@@ -29,7 +30,6 @@ import {
     buildPlayerStartError,
     externalPlayerSessions,
     maskUrlForLogs,
-    sendPlayerErrorNotification,
     traceExternalPlayer,
 } from './external-player-runtime';
 import { externalPlayerProcessTeardownGate } from './external-player-process';
@@ -43,7 +43,20 @@ import {
     MpvReusableProcess,
     MpvReuseAttemptState,
 } from './mpv-reusable-process';
-import { attachMpvOutputHandlers } from './mpv-output-errors';
+import {
+    completeFreshMpvLaunch,
+    freshMpvChildTermination,
+    prepareFreshMpvMedia,
+    settleVetoedFreshMpvLaunch,
+} from './mpv-ipc-playback';
+import {
+    createMpvIpcEndpoint,
+    spawnPlayerWithEndpoint,
+} from './mpv-ipc-endpoint';
+import {
+    attachMpvOutputHandlers,
+    markMpvExitFailure,
+} from './mpv-output-errors';
 import {
     startPositionPolling,
     stopPositionPolling,
@@ -59,6 +72,7 @@ export interface OpenExternalPlayerRequest {
     contentInfo?: PlayerContentInfo;
     startTime?: number;
     headers?: Record<string, string>;
+    launchId?: string;
 }
 
 const reusableMpvProcess = new MpvReusableProcess();
@@ -112,6 +126,7 @@ export function openMpvPlayer(
     const displacedSessionId = externalPlayerSessions.getActiveSessionId();
     const session = externalPlayerSessions.beginSession({
         player: 'mpv',
+        launchId: request.launchId,
         title: request.title,
         thumbnail: request.thumbnail,
         streamUrl: request.url,
@@ -123,7 +138,13 @@ export function openMpvPlayer(
 }
 
 async function launchMpvPlayer(
-    {
+    request: OpenExternalPlayerRequest,
+    session: ExternalPlayerSession,
+    displacedSessionId: string | null,
+    queue: QueuedMpvLaunch,
+    forcePositional = false
+): Promise<ExternalPlayerSession> {
+    const {
         url,
         title,
         userAgent,
@@ -132,17 +153,13 @@ async function launchMpvPlayer(
         contentInfo,
         startTime,
         headers,
-    }: OpenExternalPlayerRequest,
-    session: ExternalPlayerSession,
-    displacedSessionId: string | null,
-    queue: QueuedMpvLaunch
-): Promise<ExternalPlayerSession> {
+    } = request;
     const current = externalPlayerSessions.getSession(session.id);
+    const settleStop = () =>
+        settleCancelledQueuedLaunch(session, queue.pendingStop());
     // Stopped while it waited in the queue, directly or by a later Stop.
     if (current?.status === 'closed') return current;
-    if (queue.queued && queue.cancelled()) {
-        return settleCancelledQueuedLaunch(session, queue.pendingStop());
-    }
+    if (queue.queued && queue.cancelled()) return settleStop();
     if (queue.queued) {
         // The last started launch owns the child the gate waits for; the
         // session displaced at enqueue time is the fallback.
@@ -161,22 +178,18 @@ async function launchMpvPlayer(
 
     try {
         const isFlatpak = isRunningInFlatpak();
-        if (isFlatpak && protectedVpnSession()) {
-            throw new Error('Use the built-in player while app VPN is on.');
-        }
+        const requestedReuseInstance = vpnReuse(isFlatpak, MPV_REUSE_INSTANCE);
         const mpvLaunchContext = resolveExternalPlayerLaunchContext(
             'mpv',
             getMpvPath({ isFlatpak }),
             { isFlatpak }
         );
         const customMpvArguments = store.get(MPV_PLAYER_ARGUMENTS, '');
-        const requestedReuseInstance =
-            !protectedVpnSession() && store.get(MPV_REUSE_INSTANCE, false);
         const reuseInstance = shouldReuseMpvInstance(
             requestedReuseInstance,
             isFlatpak
         );
-        const useMpvSocketBridge = shouldUseMpvSocketBridge(isFlatpak);
+        const useSocketBridge = shouldUseMpvSocketBridge(isFlatpak);
         const {
             effectiveOrigin,
             effectiveReferer,
@@ -206,7 +219,7 @@ async function launchMpvPlayer(
                 parseExternalPlayerArguments(customMpvArguments).length,
         });
 
-        if (reuseInstance) {
+        if (reuseInstance && !forcePositional) {
             const reused = await reusableMpvProcess.tryReuse({
                 session,
                 previousProcessSessionId,
@@ -222,68 +235,43 @@ async function launchMpvPlayer(
                 stopPositionPolling,
             });
             if (reused) return reused;
+            if (queue.stopped()) return settleStop();
         }
 
-        traceExternalPlayer('create new mpv instance');
+        const endpoint = useSocketBridge ? createMpvIpcEndpoint() : undefined;
+        const socketPath = endpoint?.path ?? null;
+        const tracksProcess = reuseInstance && !!socketPath;
+        const args = buildFreshMpvArgs(socketPath, {
+            userAgent: effectiveUserAgent,
+            referer: effectiveReferer,
+            headerArgument: joinMpvHeaderFields(headerFields),
+            title,
+            startTime,
+        });
 
-        let socketPath: string | null = null;
-        const args: string[] = [];
+        const guideLaunch = !!session.launchId && !contentInfo;
+        const media =
+            guideLaunch && socketPath && !forcePositional
+                ? prepareFreshMpvMedia(mpvLaunchContext.playerPath)
+                : undefined;
+        if (tracksProcess) media?.watchStop(reusableMpvProcess.watchStop());
+        if (!media) args.push(url);
 
-        if (useMpvSocketBridge) {
-            socketPath =
-                process.platform === 'win32'
-                    ? `\\\\.\\pipe\\mpv-${Date.now()}`
-                    : `/tmp/mpvsocket-${Date.now()}`;
-            args.push(`--input-ipc-server=${socketPath}`, '--idle=yes');
-        }
-
-        args.push('--ytdl=no');
-
-        if (effectiveUserAgent) {
-            args.push(`--user-agent=${effectiveUserAgent}`);
-        }
-
-        if (effectiveReferer) {
-            args.push(`--referrer=${effectiveReferer}`);
-        }
-
-        if (headerFields.length > 0) {
-            args.push(
-                `--http-header-fields=${joinMpvHeaderFields(headerFields)}`
-            );
-        }
-
-        if (title) {
-            args.push(`--force-media-title=${title}`);
-        }
-
-        if (startTime) {
-            args.push(`--start=${startTime}`);
-        }
-
-        args.push(url);
-
-        await new Promise<void>((resolve, reject) => {
+        let fallingBack = false;
+        let requestedClose: Promise<void> | undefined;
+        const terminate = freshMpvChildTermination();
+        const proc = await new Promise<ChildProcess>((resolve, reject) => {
             let settled = false;
-            let startConfirmationTimer: NodeJS.Timeout | null = null;
             const resolveLaunch = () => {
-                if (settled) {
-                    return;
-                }
+                if (settled) return;
                 settled = true;
-                if (startConfirmationTimer) {
-                    clearTimeout(startConfirmationTimer);
-                }
-                resolve();
+                clearTimeout(startConfirmationTimer);
+                resolve(proc);
             };
             const rejectLaunch = (error: Error) => {
-                if (settled) {
-                    return;
-                }
+                if (settled) return;
                 settled = true;
-                if (startConfirmationTimer) {
-                    clearTimeout(startConfirmationTimer);
-                }
+                clearTimeout(startConfirmationTimer);
                 reject(error);
             };
             const spawnSpec = buildExternalPlayerSpawnSpec(
@@ -293,23 +281,25 @@ async function launchMpvPlayer(
             // Reuse teardown yields while waiting for the old child. Another
             // external process may enter teardown during that window, so the
             // process-wide invariant must be checked at the actual spawn too.
-            externalPlayerProcessTeardownGate.assertLaunchAllowed();
-            const proc = spawn(spawnSpec.command, spawnSpec.args, {
-                shell: false,
-                detached: !reuseInstance,
-                stdio: reuseInstance ? ['ignore', 'pipe', 'pipe'] : 'ignore',
-            });
+            const proc = spawnPlayerWithEndpoint(
+                spawnSpec.command,
+                spawnSpec.args,
+                tracksProcess,
+                endpoint
+            );
 
             attachMpvOutputHandlers(proc);
 
             proc.on('error', (err) => {
+                media?.abort();
                 console.error('Failed to start MPV player:', err);
                 const processSessionId = reusableMpvProcess.sessionIdFor(
                     proc,
                     session.id
                 );
                 reusableMpvProcess.clear(proc);
-                stopPositionPolling();
+                stopPositionPolling(processSessionId);
+                if (fallingBack) return resolveLaunch();
                 externalPlayerSessions.markError(
                     processSessionId,
                     `Failed to start MPV player: ${err.message}`,
@@ -321,54 +311,37 @@ async function launchMpvPlayer(
             });
 
             proc.on('exit', (code) => {
-                traceExternalPlayer('mpv exited', { code });
+                media?.abort();
                 const processSessionId = reusableMpvProcess.sessionIdFor(
                     proc,
                     session.id
                 );
                 reusableMpvProcess.clear(proc);
-                stopPositionPolling();
-
-                if (code !== 0 && code !== null) {
-                    console.error(
-                        `[MPV ERROR] MPV exited with error code ${code}`
-                    );
-                    sendPlayerErrorNotification(
-                        'MPV',
-                        `MPV player closed unexpectedly (exit code: ${code})`,
-                        'closed-unexpectedly'
-                    );
-                    externalPlayerSessions.markError(
-                        processSessionId,
-                        `MPV player closed unexpectedly (exit code: ${code})`,
-                        { code: 'closed-unexpectedly' }
-                    );
-                    resolveLaunch();
-                    return;
-                }
-
-                externalPlayerSessions.markClosed(processSessionId);
+                stopPositionPolling(processSessionId);
+                const stopping =
+                    externalPlayerSessions.isCloseRequested(processSessionId);
+                fallingBack ||= !!media?.awaitingDispatch && !stopping;
+                if (fallingBack && !stopping) return resolveLaunch();
+                if (code && !stopping)
+                    markMpvExitFailure(processSessionId, code);
+                else externalPlayerSessions.markClosed(processSessionId);
                 resolveLaunch();
             });
 
-            if (reuseInstance && socketPath) {
+            if (tracksProcess && socketPath) {
                 reusableMpvProcess.track(proc, socketPath, session.id);
-                traceExternalPlayer('stored mpv process for reuse', {
-                    socketPath,
-                });
-            } else {
-                proc.unref();
-            }
+            } else proc.unref();
 
-            externalPlayerSessions.attachCloser(session.id, async () => {
+            const closeChild = async () => {
+                media?.abort();
                 if (
-                    reuseInstance &&
+                    tracksProcess &&
                     !reusableMpvProcess.owns(proc, session.id)
                 ) {
                     return;
                 }
                 try {
-                    await externalPlayerProcessTeardownGate.terminate(proc);
+                    await terminate(proc);
                 } catch (error) {
                     const teardownError =
                         error instanceof Error
@@ -383,26 +356,60 @@ async function launchMpvPlayer(
                     rejectLaunch(teardownError);
                     throw teardownError;
                 }
-            });
+            };
+            externalPlayerSessions.attachCloser(
+                session.id,
+                () => (requestedClose = closeChild())
+            );
+            if (!tracksProcess && media)
+                mpvLaunchQueue.watchDetachedDispatch(session.id, media);
 
-            if (useMpvSocketBridge && contentInfo && socketPath) {
+            if (useSocketBridge && contentInfo && socketPath) {
                 startPositionPolling(socketPath, contentInfo, session.id);
             }
 
-            startConfirmationTimer = setTimeout(() => {
-                if (!proc.killed) {
-                    resolveLaunch();
-                }
+            const startConfirmationTimer = setTimeout(() => {
+                if (!proc.killed) resolveLaunch();
             }, 100);
             startConfirmationTimer.unref();
         });
 
-        return externalPlayerSessions.markOpened(session.id) ?? session;
+        const opened = await completeFreshMpvLaunch(
+            session,
+            socketPath,
+            () =>
+                !tracksProcess ||
+                reusableMpvProcess.currentSessionId() === session.id,
+            guideLaunch,
+            media,
+            tracksProcess
+        );
+        media?.settleDispatch();
+        if (opened && !fallingBack && !requestedClose && !media?.stopped)
+            return opened;
+        fallingBack = true;
+        try {
+            await (requestedClose ?? terminate(proc));
+        } catch (error) {
+            fallingBack = false;
+            freshTeardownUnconfirmed = true;
+            throw error;
+        }
+        if (queue.stopped() || requestedClose || media?.stopped)
+            return settleStop();
+        const vetoed = settleVetoedFreshMpvLaunch(session.id);
+        if (vetoed) return vetoed;
+        return launchMpvPlayer(
+            request,
+            session,
+            displacedSessionId,
+            queue,
+            true
+        );
     } catch (error) {
         console.error('Error opening MPV player:', error);
-        if (!reuseState.teardownUnconfirmed && !freshTeardownUnconfirmed) {
-            stopPositionPolling();
-        }
+        if (!reuseState.teardownUnconfirmed && !freshTeardownUnconfirmed)
+            stopPositionPolling(session.id);
         const restoredSession =
             reuseState.teardownUnconfirmed &&
             !reuseState.contentMutated &&

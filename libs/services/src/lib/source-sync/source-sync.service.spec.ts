@@ -1,6 +1,7 @@
 import {
     sourceAuthorization,
     assertSourceRequestAllowed,
+    sourceVerificationRefusal,
 } from './source-authorization';
 import { saveBrowserSourceConnection } from './source-browser-settings';
 import { TestBed } from '@angular/core/testing';
@@ -21,6 +22,11 @@ import { requestSourceServer } from './source-api';
 import { sourceConnection, prepareSourceConnection } from './source-connection';
 import { SourceSyncService } from './source-sync.service';
 import type { SyncedPlaylistStore } from './synced-playlist-store';
+import { FavoritesSyncClient } from '../favorites-sync/favorites-sync-client';
+import type {
+    FavoriteLocalRecord,
+    FavoriteLocalStore,
+} from '@iptvnator/shared/interfaces/favorites-sync';
 import { sourceProfileStorageKey } from './source-profile-storage';
 
 jest.mock('./source-api', () => ({ requestSourceServer: jest.fn() }));
@@ -153,6 +159,143 @@ describe('source synchronization lifecycle', () => {
         service = TestBed.inject(SourceSyncService);
     });
     afterEach(() => TestBed.resetTestingModule());
+
+    it('retires persisted favorite context on source replacement while retaining unrelated contexts and metadata-only edits', async () => {
+        inventory = [source];
+        await service.initialize();
+        await service.refresh();
+        const key = 'iptvnator-server:nas:favorites-contexts-v1';
+        const contexts = [
+            { sourceId: 'a', sourceIncarnation: 'old', provider: 'xtream' },
+            {
+                sourceId: 'synthetic-other',
+                sourceIncarnation: 'other',
+                provider: 'm3u',
+            },
+        ];
+        localStorage.setItem(key, JSON.stringify(contexts));
+        inventory = [{ ...source, title: 'Synthetic renamed source' }];
+        revision = '"inventory-2"';
+        await service.refresh();
+        expect(JSON.parse(localStorage.getItem(key)!)).toEqual(contexts);
+        inventory = [{ ...source, username: 'synthetic-replacement-account' }];
+        revision = '"inventory-3"';
+        await service.refresh();
+        expect(rows.get('a')?.username).toBe('synthetic-replacement-account');
+        expect(JSON.parse(localStorage.getItem(key)!)).toEqual([contexts[1]]);
+    });
+
+    it('does not reuse an orphaned favorite context when a source ID is recreated without a local row', async () => {
+        const key = 'iptvnator-server:nas:favorites-contexts-v1';
+        localStorage.setItem(
+            key,
+            JSON.stringify([
+                { sourceId: 'a', sourceIncarnation: 'old', provider: 'xtream' },
+            ])
+        );
+        inventory = [{ ...source, username: 'synthetic-recreated-account' }];
+        await service.initialize();
+        await service.refresh();
+        expect(rows.get('a')?.username).toBe('synthetic-recreated-account');
+        expect(JSON.parse(localStorage.getItem(key)!)).toEqual([]);
+    });
+
+    it.each([
+        {
+            rejected: { ...instance, instanceId: 'synthetic-replacement' },
+            native: false,
+        },
+        { rejected: { ...instance, storage: 'none' }, native: false },
+        {
+            rejected: { ...instance, instanceId: 'synthetic-replacement' },
+            native: true,
+        },
+        { rejected: { ...instance, storage: 'none' }, native: true },
+    ])(
+        'blocks cached favorite edits after refresh rejects discovery (%j)',
+        async ({ rejected, native }) => {
+            const originalElectron = window.electron;
+            try {
+                Reflect.deleteProperty(window, 'electron');
+                const bridge = jest.fn(async () => {
+                    throw new Error('SOURCE_SYNC.INSTANCE_CHANGED');
+                });
+                if (native)
+                    Object.defineProperty(window, 'electron', {
+                        configurable: true,
+                        writable: true,
+                        value: {
+                            sourceSyncRequest: bridge,
+                            sourceSyncConnection: () => sourceConnection(),
+                        },
+                    });
+                saveBrowserSourceConnection(
+                    sourceConnection()!,
+                    'synthetic-token'
+                );
+                await prepareSourceConnection();
+                inventory = [source];
+                await service.initialize();
+                await service.refresh();
+                request.mockResolvedValueOnce({ status: 200, body: rejected });
+                await service.refresh();
+                expect(service.errorKey()).toMatch(
+                    /SOURCE_SYNC\.(INSTANCE_CHANGED|INCOMPATIBLE)/
+                );
+                let record: FavoriteLocalRecord | null = null;
+                const mutate = jest.fn(
+                    async (
+                        _address: unknown,
+                        change: (
+                            current: FavoriteLocalRecord | null
+                        ) => FavoriteLocalRecord
+                    ) => (record = change(record))
+                );
+                const favorites: FavoriteLocalStore = {
+                    read: async () => record,
+                    entries: async () => [],
+                    pending: async () => record?.pending ?? [],
+                    mutate,
+                };
+                const client = new FavoritesSyncClient(favorites, {
+                    instanceId: 'nas',
+                    deviceId: 'synthetic-device',
+                    consent: () => 'generation',
+                    contexts: [
+                        {
+                            sourceId: 'a',
+                            sourceIncarnation: 'first',
+                            provider: 'xtream',
+                        },
+                    ],
+                    request:
+                        jest.requireActual('./source-api').requestSourceServer,
+                    changed: () => undefined,
+                    remember: () => undefined,
+                });
+                await expect(
+                    client.set(
+                        'a',
+                        { provider: 'xtream', kind: 'movie', id: '42' },
+                        true
+                    )
+                ).rejects.toThrow();
+                expect(mutate).not.toHaveBeenCalled();
+                expect(await favorites.pending()).toHaveLength(0);
+                expect(bridge).not.toHaveBeenCalled();
+                await service.refresh();
+                expect(sourceVerificationRefusal()).toBeUndefined();
+                expect(() =>
+                    assertSourceRequestAllowed('https://nas.test/api/xtream')
+                ).not.toThrow();
+            } finally {
+                window.electron = originalElectron;
+                sessionStorage.clear();
+                localStorage.clear();
+                await prepareSourceConnection();
+            }
+        }
+    );
 
     it.each(['created', 'replaced'] as const)(
         'does not prune a source %s by another tab while an older inventory materializes',
@@ -398,6 +541,29 @@ describe('source synchronization lifecycle', () => {
         await expect(store.dbGetAppPlaylists()).resolves.toEqual([]);
         expect(changed).toHaveBeenCalledTimes(1);
     });
+    it.each(['network error', 'HTTP 503'])(
+        'reports an outage instead of a previous access denial after %s',
+        async (failure) => {
+            await service.initialize();
+            await service.refresh();
+            request
+                .mockResolvedValueOnce({ status: 200, body: instance })
+                .mockResolvedValueOnce({ status: 401 });
+            await service.refresh();
+            expect(service.state()).toBe('locked');
+
+            if (failure === 'network error')
+                request.mockRejectedValueOnce(new Error('SOURCE_SYNC.OFFLINE'));
+            else request.mockResolvedValueOnce({ status: 503 });
+            await service.refresh();
+            expect(service.state()).toBe('offline');
+            expect(service.errorKey()).toBe('SOURCE_SYNC.OFFLINE');
+
+            await service.refresh();
+            expect(service.state()).toBe('connected');
+        }
+    );
+
     it.each([false, true])(
         'retries an unavailable URL without a NAS revision change (persisted failure: %s)',
         async (persisted) => {
@@ -489,10 +655,12 @@ describe('source synchronization lifecycle', () => {
     it('preserves a completed cache offline and rejects source writes until reconnecting', async () => {
         receipt = '1';
         rows.set('a', applySourceDefinition(source));
-        request.mockRejectedValueOnce(new Error('unreachable'));
+        request.mockResolvedValueOnce({ status: 503 });
         await service.initialize();
         await service.refresh();
         expect(service.state()).toBe('offline');
+        expect(service.errorKey()).toBe('SOURCE_SYNC.OFFLINE');
+        expect(service.hasCachedLibrary).toBe(true);
         await expect(store.dbGetAppPlaylists()).resolves.toHaveLength(1);
         const calls = request.mock.calls.length;
         await expect(
@@ -506,6 +674,20 @@ describe('source synchronization lifecycle', () => {
         inventory = [source];
         await service.refresh();
         expect(service.state()).toBe('connected');
+        expect(service.errorKey()).toBeNull();
+    });
+
+    it('reports an outage immediately when a source write detects it first', async () => {
+        await service.initialize();
+        await service.refresh();
+        request.mockRejectedValueOnce(new Error('SOURCE_SYNC.OFFLINE'));
+
+        await expect(
+            store.dbUpsertAppPlaylist(applySourceDefinition(source))
+        ).rejects.toThrow('SOURCE_SYNC.OFFLINE');
+        expect(service.state()).toBe('offline');
+        expect(service.errorKey()).toBe('SOURCE_SYNC.OFFLINE');
+        expect(service.hasCachedLibrary).toBe(true);
     });
 
     it('revokes browser credentials immediately after a mutation detects a replacement instance', async () => {

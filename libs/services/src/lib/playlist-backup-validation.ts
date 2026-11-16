@@ -1,3 +1,4 @@
+import { isStalkerBackupPosition } from './playlist-backup-playback-position';
 import {
     isM3uRecentlyViewedItem,
     PlaylistBackupSettings,
@@ -32,6 +33,11 @@ export function hasValidBackupEntryData(entry: unknown): boolean {
         entry['position'] !== undefined &&
         (typeof entry['position'] !== 'number' ||
             !Number.isFinite(entry['position']))
+    )
+        return false;
+    if (
+        entry['autoImportEpg'] !== undefined &&
+        typeof entry['autoImportEpg'] !== 'boolean'
     )
         return false;
     if (!isRecord(entry['userState'])) return false;
@@ -76,6 +82,12 @@ export function hasValidBackupEntryData(entry: unknown): boolean {
     switch (entry['portalType']) {
         case 'm3u':
             return (
+                (entry['epgUrls'] === undefined ||
+                    isStringList(entry['epgUrls'])) &&
+                (entry['manualEpgUrls'] === undefined ||
+                    isStringList(entry['manualEpgUrls'])) &&
+                (entry['disabledEpgUrls'] === undefined ||
+                    isStringList(entry['disabledEpgUrls'])) &&
                 isText(metadata['rawM3u']) &&
                 /^\s*#EXTM3U/i.test(metadata['rawM3u']) &&
                 isStringList(state['favorites']) &&
@@ -88,7 +100,12 @@ export function hasValidBackupEntryData(entry: unknown): boolean {
                 isText(metadata['portalUrl']) &&
                 isText(metadata['macAddress']) &&
                 isRecordList(state['favorites']) &&
-                isRecordList(state['recentlyViewed'])
+                isRecordList(state['recentlyViewed']) &&
+                (state['playbackPositions'] === undefined ||
+                    (Array.isArray(state['playbackPositions']) &&
+                        state['playbackPositions'].every(
+                            isStalkerBackupPosition
+                        )))
             );
         case 'xtream':
             return (

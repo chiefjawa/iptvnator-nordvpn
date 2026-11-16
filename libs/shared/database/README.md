@@ -31,6 +31,46 @@ import { content, categories, playlists, type Content } from '@iptvnator/shared/
 ### Connection observer (`connection-observer.ts`)
 - `setDatabaseConnectionObserver(observer | null)` - Called by `initDatabase` with each connection it opens, before any statement runs on it. The Electron main process registers one only with `IPTVNATOR_PERF_CAPTURE=1`, to count main-thread SQL statements. The module has no runtime dependencies and is also importable as `@iptvnator/shared/database/connection-observer`.
 
+## Activity-sync storage
+
+`@iptvnator/shared/database/activity-sync` provides opt-in SQLite stores for
+activity state, local pending operations and server idempotency receipts. The
+module does not alter `initDatabase()` or migrate/upload legacy playback rows.
+Its constructors create only additive activity tables and indexes, and local
+projection/outbox changes share one synchronous transaction. Optional delivery
+leases live inside those JSON records and are checked during compare-and-swap;
+legacy records without leases remain valid. No schema migration is required.
+Server state and receipts also commit together, including durable reset barriers. The owning
+runtime must verify the selected instance/source incarnation and provide the
+connection. Electron read/list/pending/compare-and-swap operations run in the
+database worker through the fixed `DB_ACTIVITY_LOCAL` IPC. NAS routes use a
+separate server store and persisted source incarnations. See the
+[self-hosted activity contract](../../../docs/architecture/pwa-self-hosted.md#viewing-activity-synchronization).
+
+## Favorites-sync storage
+
+`@iptvnator/shared/database/favorites-sync` provides separate additive local
+projection/outbox tables and server state/receipt tables. Constructors preserve
+all historical favorites, catalogs, playlists, history and activity tables.
+Membership changes and local sync intent commit together; server removals retain
+a persistent revision. Electron uses the worker-only `DB_FAVORITES_LOCAL` CAS
+bridge. The owning runtime verifies instance, consent and source incarnation.
+See [the favorites contract](../../../docs/architecture/pwa-self-hosted.md#favorites-synchronization).
+
+## History-sync storage
+
+`@iptvnator/shared/database/history-sync` owns additive source-scoped local/server
+history tables and durable operation receipts. It does not migrate, delete or
+upload legacy recently-viewed rows. Local projection/outbox updates share a
+transaction; native renderer writes use `DB_HISTORY_LOCAL` compare-and-swap.
+Server touches, removals and clears persist with their receipt decision.
+Server acceptance time uses a persisted per-instance clock in the same transaction
+as state and receipts. Its first write seeds from pre-clock source states; normal
+writes read only the instance clock, preserving cross-source order on restart or
+clock rollback without scanning all histories for every operation.
+Historical schema tests preserve populated 0.19–0.24 tables through rollback and reopening.
+See [Recently Viewed sync](../../../docs/architecture/pwa-self-hosted.md#recently-viewed-synchronization).
+
 ## Database Location
 
 The SQLite database is stored at `<data root>/databases/iptvnator.db`. The data
@@ -47,6 +87,16 @@ The main process chooses this profile before opening a database or starting
 its worker. Disconnecting returns to the retained standalone database.
 
 ## Upgrade Compatibility And Migrations
+
+M3U automatic EPG import uses nullable `playlists.auto_import_epg`: NULL keeps
+the historical default-on behavior, and 0 records an import opt-out. It is
+projected by metadata reads without loading the playlist payload. The additive
+migration runs before the canonical payload-last rebuild and is safe to repeat.
+
+EPG metadata reads preserve recorded provenance: missing `detected_epg_urls`
+decodes as an empty detected set, never as the enabled `epg_urls` list. Legacy
+enabled guides remain stored and usable with unknown origin through full reads,
+metadata projections and subsequent writes.
 
 Users may skip releases. The application must apply every required migration in
 dependency order when opening an older database, preserving user data without

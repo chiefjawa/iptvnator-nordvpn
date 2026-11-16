@@ -1,3 +1,4 @@
+import { isBackKey } from '@iptvnator/tv/util';
 import { LiveChannels } from './live-channels';
 import { useLiveBrowse } from './use-live-browse';
 import { useEffect, useRef } from 'preact/hooks';
@@ -27,10 +28,7 @@ export function Live({
                 if (
                     !tv.fullscreen &&
                     !browse.categoriesOpen &&
-                    (event.keyCode === 461 ||
-                        ['Escape', 'BrowserBack', 'Backspace'].includes(
-                            event.key
-                        ))
+                    isBackKey(event)
                 ) {
                     event.preventDefault();
                     event.stopPropagation();
@@ -58,6 +56,13 @@ export function Live({
                 </div>
                 <div class="section-title">
                     <h2>{selected?.title ?? 'Programme guide'}</h2>
+                    <p class="muted source-name">
+                        {
+                            tv.data.sources.find(
+                                (source) => source.id === selected?.sourceId
+                            )?.name
+                        }
+                    </p>
                     <div class="actions">
                         <button data-focus="live-grid-guide" onClick={openGrid}>
                             TV Guide

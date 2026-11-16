@@ -10,6 +10,7 @@ import { MatIcon } from '@angular/material/icon';
 import { MatButton } from '@angular/material/button';
 import { MatProgressSpinner } from '@angular/material/progress-spinner';
 import { TranslatePipe } from '@ngx-translate/core';
+import { EmptyStateComponent } from '@iptvnator/playlist/shared/ui';
 import { registerWorkspaceBack } from '@iptvnator/portal/shared/data-access';
 import { InfiniteScrollDirective } from '../../directives/infinite-scroll.directive';
 
@@ -17,6 +18,7 @@ import { InfiniteScrollDirective } from '../../directives/infinite-scroll.direct
     selector: 'app-search-layout',
     standalone: true,
     imports: [
+        EmptyStateComponent,
         InfiniteScrollDirective,
         MatButton,
         MatIcon,
@@ -43,6 +45,7 @@ export class SearchLayoutComponent {
     /** Whether search is in progress */
     readonly isLoading = input<boolean>(false);
     readonly hasError = input<boolean>(false);
+    readonly hideEmpty = input(false);
     readonly retryClick = output<void>();
 
     /**
@@ -93,6 +96,13 @@ export class SearchLayoutComponent {
      */
     readonly nearEndResetKey = input<string | null>(null);
 
+    /**
+     * Distance from the bottom, in px, at which `nearEnd` fires. Poster
+     * results ask two rows ahead, so a key press that arrives while the next
+     * chunk renders still has a row to move to.
+     */
+    readonly nearEndThresholdPx = input<number>(240);
+
     /** Initial state description translation key */
     readonly initialDescriptionKey = input<string>(
         'PORTALS.SEARCH_VIEW.INITIAL_DESCRIPTION'
@@ -131,6 +141,7 @@ export class SearchLayoutComponent {
     /** Check if we should show the "no results" state */
     get showNoResults(): boolean {
         return (
+            !this.hideEmpty() &&
             this.searchTerm().length >= this.minSearchLength() &&
             this.resultsCount() === 0 &&
             !this.isLoading()

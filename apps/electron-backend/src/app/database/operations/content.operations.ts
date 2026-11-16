@@ -1,4 +1,6 @@
 import { selectContentFields } from './content-fields';
+import { setAppState } from './playlist.operations';
+import { enabledXtreamCatalogCondition } from './xtream-content-selection';
 export { getContentByXtreamId } from './content-identity-lookup';
 import { reconcileFavoriteIdentity } from './favorite-catalog';
 import { and, asc, desc, eq, inArray, or, sql, type SQL } from 'drizzle-orm';
@@ -316,6 +318,7 @@ async function selectXtreamGlobalSearchCandidatesWithTitleIndex(
             types.map((type) => sql`${type}`),
             sql`, `
         )})
+        AND ${enabledXtreamCatalogCondition(sql`cat.playlist_id`, sql`c.type`)}
         AND ${sql.join(titleConditions, sql` AND `)}
         ${excludeHidden ? sql`AND cat.hidden = 0` : sql``}
         ${unlockedCategorySql()}
@@ -357,6 +360,7 @@ async function selectXtreamGlobalSearchCandidatesWithFts(
         INNER JOIN categories AS cat ON c.category_id = cat.id
         INNER JOIN playlists AS p ON cat.playlist_id = p.id
         WHERE content_title_fts MATCH ${matchQuery}
+        AND ${enabledXtreamCatalogCondition(sql`cat.playlist_id`, sql`c.type`)}
         AND c.type IN (${sql.join(
             types.map((type) => sql`${type}`),
             sql`, `
@@ -381,6 +385,7 @@ async function selectXtreamGlobalSearchCandidatesWithContentScan(
     candidateLimit: number
 ): Promise<XtreamGlobalSearchCandidate[]> {
     const conditions = [
+        enabledXtreamCatalogCondition(),
         inArray(
             schema.content.type,
             types as Array<'live' | 'movie' | 'series'>
@@ -691,6 +696,7 @@ export async function getContent(
             and(
                 eq(schema.categories.playlistId, playlistId),
                 eq(schema.content.type, type),
+                enabledXtreamCatalogCondition(),
                 unlockedCategoryCondition()
             )
         );
@@ -770,6 +776,7 @@ function getGlobalRecentlyAddedByType(
     playlistType?: RecentlyAddedPlaylistType
 ) {
     const whereConditions = [
+        enabledXtreamCatalogCondition(),
         eq(schema.content.type, type),
         eq(schema.categories.hidden, false),
         unlockedCategoryCondition(),
@@ -960,6 +967,13 @@ export async function saveContent(
               toXtreamContentValue
           );
 
+    // A process exit between commits must leave recoverable unfinished state.
+    await setAppState(
+        db,
+        `xtream-import-status:${playlistId}:${type}`,
+        'importing'
+    );
+
     return capturePhase
         ? capturePhase.captureAsync(
               XTREAM_DATABASE_PERFORMANCE_PHASE.SQLITE_CONTENT_WRITE_TRANSACTIONS,
@@ -1041,6 +1055,7 @@ export async function searchContent(
     }
 
     const conditions = [
+        enabledXtreamCatalogCondition(),
         eq(schema.categories.playlistId, playlistId),
         inArray(
             schema.content.type,

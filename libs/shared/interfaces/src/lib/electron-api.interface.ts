@@ -1,9 +1,14 @@
+import type { HostedServerCommand, HostedServerStatus } from './hosted-server.interface';
 export type ElectronBridgeAppMenuAction = 'settings' | 'check-for-updates';
 import type { AppUpdateChannel } from './app-update-channel.util';
 import type { MultiplexBridgeApi } from './connection-multiplex.interface';
 import type { SourceProbeContext, SourceHealthResult } from './source-health';
 import type { PortalRequestFailureEnvelope } from './portal-request-failure.util';
 import type { XtreamConnectionFailure } from './xtream-connection-test';
+import type {
+    XtreamCatalogStateCondition,
+    XtreamCatalogStateResult,
+} from './xtream-content-selection';
 import type { ZoomLevelAction } from './zoom-level.util';
 import type {
     CatchupDownloadMetadata,
@@ -421,6 +426,8 @@ export interface ElectronBridgeEpgSearchResult {
 
 export interface ElectronBridgeEpgLookupOptions {
     sourceUrls?: string[];
+    /** For getChannelPrograms: distinguish an unavailable database from an empty schedule. */
+    rejectOnError?: boolean;
 }
 
 /**
@@ -534,6 +541,8 @@ export interface ElectronBridgeXtreamContent {
     added: string;
     poster_url: string;
     backdrop_url?: string | null;
+    tmdb_id?: number | null;
+    release_year?: number | null;
     epg_channel_id?: string | null;
     tv_archive?: number | null;
     tv_archive_duration?: number | null;
@@ -748,21 +757,36 @@ export interface ElectronBridgeApi extends Partial<MultiplexBridgeApi> {
     onAppMenuAction: (
         callback: (action: ElectronBridgeAppMenuAction) => void
     ) => () => void;
+    historyLocalRequest?: (
+        request: import('./history-sync/history.contract').HistoryLocalRequest
+    ) => Promise<unknown>;
+    favoritesLocalRequest?: (
+        request: import('./favorites-sync/favorites-sync.contract').FavoriteLocalRequest
+    ) => Promise<unknown>;
+    activityLocalRequest?: (
+        request: import('./activity-sync/activity-sync.wire').ActivityLocalRequest
+    ) => Promise<unknown>;
     sourceSyncConnection?: () =>
         import('./source-sync.interface').SourceServerConnection | null;
+    sourceSyncSavedConnection?: () =>
+        import('./source-sync.interface').SavedSourceServerConnection | null;
     sourceSyncRequest?: (
         request: import('./source-sync.interface').SourceServerRequest
     ) => Promise<import('./source-sync.interface').SourceServerResponse>;
     sourceSyncConfigure?: (
         url: string,
         token: string,
-        restart: boolean
+        restart: boolean,
+        savedInstanceId?: string
     ) => Promise<
         import('./source-sync.interface').SourceServerConnection & {
             tokenPersisted: boolean;
         }
     >;
+    hostedServerControl?: (command: HostedServerCommand) => Promise<HostedServerStatus>;
+    hostedServerAccessCode?: () => Promise<string>;
     sourceSyncDisconnect?: () => Promise<void>;
+    sourceSyncForget?: () => Promise<void>;
     sourceSyncLocalSources?: () => Promise<Playlist[]>;
     onSourceSyncResume?: (callback: () => void) => () => void;
     onPortalDebugEvent?: (
@@ -905,7 +929,8 @@ export interface ElectronBridgeApi extends Partial<MultiplexBridgeApi> {
         userAgent?: string | null,
         referer?: string | null,
         scopeUrl?: string | null,
-        credentials?: ElectronBridgeStreamCredentials | null
+        credentials?: ElectronBridgeStreamCredentials | null,
+        origin?: string | null
     ) => Promise<boolean>;
     openInMpv: (
         url: string,
@@ -916,7 +941,8 @@ export interface ElectronBridgeApi extends Partial<MultiplexBridgeApi> {
         origin?: string,
         contentInfo?: PlayerContentInfo,
         startTime?: number,
-        headers?: Record<string, string>
+        headers?: Record<string, string>,
+        launchId?: string
     ) => Promise<ExternalPlayerSession>;
     openInVlc: (
         url: string,
@@ -927,12 +953,15 @@ export interface ElectronBridgeApi extends Partial<MultiplexBridgeApi> {
         origin?: string,
         contentInfo?: PlayerContentInfo,
         startTime?: number,
-        headers?: Record<string, string>
+        headers?: Record<string, string>,
+        launchId?: string
     ) => Promise<ExternalPlayerSession>;
     autoUpdatePlaylists: (
         playlists: Playlist[],
         options?: ElectronBridgeTrustOptions
     ) => Promise<AutoUpdatePlaylistsResult>;
+    /** Stops imports without removing sources, mappings or cached programmes. */
+    setEpgEnabled?: (enabled: boolean) => Promise<void>;
     fetchEpg: (
         urls: string[],
         options?: ElectronBridgeTrustOptions
@@ -963,7 +992,10 @@ export interface ElectronBridgeApi extends Partial<MultiplexBridgeApi> {
     /** Native picker for a local XMLTV file; resolves null when cancelled. */
     openEpgFileDialog: () => Promise<string | null>;
     clearEpgData: () => Promise<ElectronBridgeResult>;
-    reconcileEpgSources: (urls: string[]) => Promise<ElectronBridgeResult>;
+    reconcileEpgSources: (
+        urls: string[],
+        epgEnabled?: boolean
+    ) => Promise<ElectronBridgeResult>;
     clearEpgDataForSource: (sourceUrl: string) => Promise<ElectronBridgeResult>;
     checkEpgFreshness: (
         urls: string[],
@@ -995,6 +1027,10 @@ export interface ElectronBridgeApi extends Partial<MultiplexBridgeApi> {
     updateSettings: (settings: Partial<Settings>) => Promise<void>;
     getAiSettings: () => Promise<ElectronBridgeAiSettings>;
     setMpvPlayerPath: (mpvPlayerPath: string) => Promise<void>;
+    getExternalPlayerAvailability?: (paths?: {
+        mpv?: string;
+        vlc?: string;
+    }) => Promise<{ mpv: boolean | null; vlc: boolean | null }>;
     setVlcPlayerPath: (vlcPlayerPath: string) => Promise<void>;
     /**
      * The portal's JSON, the `{ stalkerAuthFailure }` marker, or a
@@ -1092,7 +1128,8 @@ export interface ElectronBridgeApi extends Partial<MultiplexBridgeApi> {
     ) => Promise<ElectronBridgeResult>;
     dbDeleteXtreamContent: (
         playlistId: string,
-        operationId?: string
+        operationId?: string,
+        contentTypes?: import('./xtream-content-selection').XtreamContentType[]
     ) => Promise<{
         success: boolean;
         favorites: XtreamBackupFavoriteItem[];
@@ -1109,7 +1146,14 @@ export interface ElectronBridgeApi extends Partial<MultiplexBridgeApi> {
         favorites: XtreamBackupFavoriteItem[],
         recentlyViewed: XtreamBackupRecentlyViewedItem[],
         operationId?: string
-    ) => Promise<ElectronBridgeResult>;
+    ) => Promise<
+        ElectronBridgeResult & {
+            resolvedHistory?: Pick<
+                XtreamBackupRecentlyViewedItem,
+                'contentType' | 'xtreamId'
+            >[];
+        }
+    >;
     dbHasCategories: (playlistId: string, type: string) => Promise<boolean>;
     dbGetCategories: (
         playlistId: string,
@@ -1128,8 +1172,9 @@ export interface ElectronBridgeApi extends Partial<MultiplexBridgeApi> {
     ) => Promise<ElectronBridgeCategoryRow[]>;
     dbUpdateCategoryVisibility: (
         categoryIds: number[],
-        hidden: boolean
-    ) => Promise<ElectronBridgeResult>;
+        hidden: boolean,
+        explicit?: boolean
+    ) => Promise<ElectronBridgeResult & { explicitRecorded?: true }>;
     /**
      * Re-stamps `categories.locked` for one playlist and type from the given
      * provider category ids: rows in the list become locked, every other row
@@ -1197,8 +1242,10 @@ export interface ElectronBridgeApi extends Partial<MultiplexBridgeApi> {
     dbReorderGlobalFavorites: (
         updates: ElectronBridgeFavoriteReorderUpdate[]
     ) => Promise<ElectronBridgeResult>;
+    /** Ordinary reads cap at 100; recovery explicitly requests all entries. */
     dbGetRecentItems: (
-        playlistId: string
+        playlistId: string,
+        options?: { all?: boolean }
     ) => Promise<ElectronBridgeXtreamContent[]>;
     dbAddRecentItem: (
         contentId: number,
@@ -1219,7 +1266,9 @@ export interface ElectronBridgeApi extends Partial<MultiplexBridgeApi> {
         xtreamId: number,
         playlistId: string,
         contentType?: ElectronBridgePortalContentType,
-        identity?: ContentMetadataPatch
+        identity?: ContentMetadataPatch,
+        categoryId?: number,
+        excludeLocked?: boolean
     ) => Promise<ElectronBridgeXtreamContent | null>;
     dbSetContentMetadataIfMissing: (
         contentId: number,
@@ -1228,8 +1277,12 @@ export interface ElectronBridgeApi extends Partial<MultiplexBridgeApi> {
     dbGetAppState: (key: string) => Promise<string | null>;
     dbSetAppState: (
         key: string,
-        value: string
-    ) => Promise<ElectronBridgeResult>;
+        value: string,
+        condition?: XtreamCatalogStateCondition
+    ) => Promise<XtreamCatalogStateResult>;
+    dbCheckXtreamCatalogConnection: (
+        condition: XtreamCatalogStateCondition
+    ) => Promise<XtreamCatalogStateResult>;
     // TMDB metadata cache
     dbGetTmdbMetadata: (
         mediaType: TmdbCacheMediaType,
@@ -1354,14 +1407,16 @@ export interface ElectronBridgeApi extends Partial<MultiplexBridgeApi> {
         callback: (data: EmbeddedMpvSession) => void
     ) => () => void;
     closeExternalPlayerSession: (
-        sessionId: string
+        sessionId: string,
+        exact?: boolean
     ) => Promise<ExternalPlayerSession | null>;
     getEmbeddedMpvSupport: () => Promise<EmbeddedMpvSupport>;
     prepareEmbeddedMpv?: () => Promise<EmbeddedMpvSupport>;
     createEmbeddedMpvSession: (
         bounds: EmbeddedMpvBounds,
         title?: string,
-        initialVolume?: number
+        initialVolume?: number,
+        subtitlesOff?: boolean
     ) => Promise<EmbeddedMpvSession>;
     loadEmbeddedMpvPlayback: (
         sessionId: string,
@@ -1446,7 +1501,7 @@ export interface ElectronBridgeApi extends Partial<MultiplexBridgeApi> {
      * preload builds do not ship the pump.
      */
     attachEmbeddedMpvFrameView?: (sessionId: string) => Promise<boolean>;
-    detachEmbeddedMpvFrameView?: () => void;
+    detachEmbeddedMpvFrameView?: (sessionId?: string) => void;
     downloadsStart: (
         data: ElectronBridgeDownloadStartPayload
     ) => Promise<ElectronBridgeDownloadStartResult>;

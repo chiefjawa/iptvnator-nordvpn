@@ -8,6 +8,8 @@ Use it when changing existing views or introducing new list-based UI in the work
 
 1. Prefer shared components over duplicated markup.
    The canonical channel row is `app-channel-list-item`.
+   Its main button takes its accessible name from visible channel and programme
+   text; a name-only `aria-label` hides the programme metadata from that name.
 
 2. Drive emphasis through selection state, not through constant decoration.
    Neutral rows should stay quiet. Only active or current items should pick up strong color.
@@ -21,6 +23,12 @@ Use it when changing existing views or introducing new list-based UI in the work
 
 5. Scroll ownership must be explicit.
    Headers stay visible. Lists scroll. Do not let nested panes compete for scroll.
+   The viewport and independent vertical page scrollers stop at their edges in
+   standalone PWAs and the native Android TV shell. The web stylesheet sets
+   `--app-overscroll-y` for those runtimes and applies it to the viewport.
+   The lazy workspace stylesheet applies it to routed scroll panes. Browser
+   tabs retain their normal behavior and horizontal rails still hand vertical
+   gestures to the page.
 
 6. Normal text, including metadata and selected labels, keeps at least 4.5:1
    contrast. Use `--app-muted-color` for secondary text and
@@ -238,9 +246,13 @@ in the overlay chunk. Everything else is lazy by these rules:
   "focus was inside" in a microtask after such a `focusout`, which the close
   destroys the panel before. Both have specs that detach the view first.
 
-The app theme is the exclusive `.dark-theme` or `.light-theme` class that
-`SettingsService` puts on `<body>`; a "System" choice resolves the OS
-preference there and nowhere else. Component styles never use a
+The app mode is the exclusive `.dark-theme` or `.light-theme` class that
+`SettingsService` puts on `<body>`. Its `data-app-theme` attribute identifies
+the resolved palette: `light`, `dark`, `cream`, `mocha`, `night-owl`,
+`black-oled`, or `high-contrast`. Cream uses light mode; Mocha, Night Owl,
+Black OLED and High Contrast use dark mode. A "System" choice resolves the OS
+preference there and nowhere else, to the user's light-mode and dark-mode presets
+(Light and Dark unless changed). Component styles never use a
 `prefers-color-scheme` query, which follows the OS: with the app set to dark
 on a light OS it paints light colours
 into the dark theme. Read `--app-*` tokens, which switch with the class, or
@@ -334,6 +346,10 @@ instead, through `--app-list-selected-*`: a soft tint with no lift or glow,
 outlined in light theme. Its text is the heading colour in light theme (the
 selection blue on its own tint is 3.3:1) and the selection colour in dark.
 
+Browser tabs use standard text selection. Electron, the Android TV shell,
+and PWA windows in standalone display mode suppress general text selection.
+Text fields and explicitly copyable values remain selectable.
+
 ## Single-Choice Menus And Status Chips
 
 Catalog headers keep the category title/count on the left and the active
@@ -423,6 +439,10 @@ TMDB enrichment adds a moment later fills the compact hero instead of
 growing it. The pane is a size container (`detail`); the poster hides below
 760px of pane width.
 
+The detail shell owns vertical scrolling and follows the app's overscroll
+policy so dragging past the content cannot expose a gap beneath the workspace
+header in standalone apps.
+
 The pieces are shared and provider-neutral (`libs/ui/components/src/lib/detail-ui/`):
 `app-meta-chip` (pill; `rating` and `status` variants; facets as projected
 `.meta-chip__facet` buttons), `app-detail-action-button` (the light primary
@@ -439,8 +459,18 @@ rail, whose heading keeps a trace of it, and reaches the page colour before
 that rail's cards (their scroll-edge fades are drawn in the page colour), with
 no tail in the narrow layout. Series titles drop their season marker (`splitSeasonSuffix`) into a
 "Season N" chip. Rows a provider cannot serve are left out of the menu, never
-disabled. The page-level Sass mixin (`libs/ui/styles/_detail-view.scss`)
+disabled. The More overlay prefers the trigger's right edge and flips upward;
+when neither position fits, CDK pushes it inside the viewport with a 12px
+margin. The panel keeps its height cap and scrolls its rows; Home/End and
+arrow keys reveal the focused row, and Escape returns focus to the trigger.
+`detail-more-menu.e2e.ts` checks short-window geometry, both themes and real
+pointer handoffs for movie and series menus, including after scrolling.
+The page-level Sass mixin (`libs/ui/styles/_detail-view.scss`)
 only carries the page shell, meta items and the episodes section.
+
+On phones, Trailer uses an icon with its accessible label. Compact horizontal
+spacing leaves room for five 44px-tall controls at 375px, including with a
+classic scrollbar. The action row can wrap when it needs more space.
 
 With `detailTrailerBackdrop` on (Settings → Playback → "Play trailers in
 details background", default off) the hosts hand the trailer embed URL to the
@@ -471,6 +501,10 @@ inputs, overlays, and resize handles—requires `app-region: no-drag`. The share
 directive-generated `.resize-handle` sets this centrally in `resizable.scss`.
 The shared live-layout sidebar reserves 8 px at its right edge so the inward
 half of the 12 px resize handle cannot cover the channel scrollbar.
+The outer sidebar owns the single pane divider; nested channel lists add no
+edge border. The header background and bottom separator extend across the
+resize gutter, while its controls keep their inset. Narrow layouts remove
+the gutter together with the resize handle.
 
 ## Resizable Sidebar Widths
 
@@ -514,6 +548,10 @@ host by its padding and border on the first move.
   decorative border on something focusable: any outline outranks the
   fallback, so the element loses its ring (use `border` or a spread
   `box-shadow`, as the selected season tab does).
+- Shared navigation rows draw the keyboard ring inside their edge, over
+  the selection border when selected. Lists keep 2px of top inset so the
+  selected row's 1px lift cannot clip its border; group lists retain that
+  inset too. Selection tint and `aria-current` remain when focus moves away.
 - **Removing the outline.** A component rule that sets `outline: none` also
   outranks the fallback, so it must show focus another way: a search field's
   wrapper takes a token border on `:focus-within`, optionally with a soft
@@ -534,6 +572,22 @@ host by its padding and border on the first move.
   themes. Each stop must draw exactly one ring in the token's colour, uncut
   by an ancestor's `overflow: hidden`, at 3:1 where it sits on a flat
   colour, and a click must draw none.
+  It also checks that the detail page stays ringless when seeking after a
+  click, including a click on the already focused page. Tabbing back to the
+  page shows its focus ring.
+
+Catalog result counts use an atomic `status` region so search/filter changes
+are announced without moving focus from the search field. Opening a catalog
+card saves its identity in that list's history entry. Returning from details
+restores the card after scroll restoration, or the workspace main landmark
+if the card disappeared; an active input or dialog keeps focus.
+Catalog scroll restoration uses `GridListComponent.restoreScrollPosition()` so
+the TV window is rendered before the synchronous card-focus lookup.
+
+Shared season tabs have one Tab stop, wrapping Left/Right navigation
+(following text direction), Home/End, and an associated episode `tabpanel`.
+The dropdown variant keeps Material menu keyboard behavior. Detail and
+fullscreen instances own distinct tab/panel IDs.
 
 ## Keyboard Scrolling and Channel Focus
 
@@ -548,7 +602,17 @@ the normal DOM order; Safari's default keyboard preference skips buttons on
 plain Tab, so there the row button is reached with Option+Tab (WebKit E2E
 runs press it through `pressTab` in `apps/web-e2e/src/e2e-helpers.ts`).
 Scrolling from a virtual row moves focus to its viewport
-before CDK can recycle the row; asynchronous data updates never move focus.
+before CDK can recycle the row; asynchronous data updates preserve connected
+focused controls. If the focused row is removed, focus moves to the next row
+at the same index, the previous row at the end, or the empty scroll owner.
+When filtering shifts a programme guide row, focus follows its programme
+if it is still present, or the channel cell otherwise. During a schedule
+refresh, keep the focused programme identity through errors until the row has
+loaded successfully.
+If its row moves during that refresh, reveal the row and defer DOM focus
+until the programme is present or the refreshed schedule shows it is gone.
+A destroyed pane falls back to its captured workspace main landmark. This
+recovery never takes focus from another active control.
 Xtream aligns a newly selected channel only when it is outside the viewport;
 updates to the same selected ID never re-align it. A smooth scroll to an
 already visible row would otherwise cancel an immediate keyboard scroll.
@@ -638,16 +702,13 @@ them size from the `--cover-grid-min-width` / `--cover-rail-width` /
 
 ### Posters-only wall
 
-`Settings.showCoverTitles` (Settings > General, default on, only an explicit
+`Settings.showCoverTitles` (Settings > Appearance, default on, only an explicit
 `false` opts out — coerced like `webPlayerSharedControls`) removes the title
 row under VOD and series covers so the grid shows more rows per screen.
 
 - **Resolution.** `CoverTitlesService.postersOnly` (`libs/portal/shared/ui`)
-  is the single source: the opt-out AND a hover-capable pointer
-  (`(any-hover: hover)` media query, tracked live). On touch-only devices the
-  preference is ignored and titles stay under the covers, because a tap
-  already opens the item and there is no gesture left to peek at a hidden
-  name.
+  follows the saved preference on all devices. A tap on a touch screen
+  opens the item, and the card retains its accessible title.
 - **Scope.** Catalog grids (Xtream/Stalker VOD and series), unified
   favorites/recent grids and the portal favorites tab. Exempt, regardless of
   the setting: live channel grids (`type` `live`/`itv`/`radio` or the
@@ -683,6 +744,30 @@ row under VOD and series covers so the grid shows more rows per screen.
   because the card's `overflow: hidden` would clip an outline on the inner
   surface on every edge. Poster `alt` is the title, not a literal.
 
+### Row windowing (TV shell)
+
+Under the TV shell (`tv-shell` class on `<html>`, set by its `tv.js` before
+the app boots) `app-grid-list` renders only the rows around its viewport plus
+three overscan rows on each side (`grid-window.ts`). The grid's top and
+bottom padding stand in for the rows left out, so the host keeps the full
+grid's `scrollHeight`: the infinite-scroll near-end check, the store's
+growing `visibleCount` and the saved `scrollTop` restore work unchanged. The
+`@for` tracks the item identity (`id`, `stream_id`, `series_id`,
+`xtream_id`, else the item's absolute position) so the focused card survives
+a window shift and a consumer that re-maps its items. A held D-pad key
+scrolls faster than a slow TV renders frames, so a capture `keydown` listener
+re-reads the offset and renders the window synchronously before the remote
+layer looks for the next row. Spacers assume one row height, so
+`.grid-list--windowed` turns `content-visibility` off on the cards and
+reserves both title lines. Outside the shell the grid renders every item with
+`track $index`, unchanged. A hidden grid (`display: none` ancestor) has no
+geometry and keeps its last window. Rows that re-enter the window re-create
+their `<img>`: posters a provider serves as cacheable come from the disk
+cache, while `no-store` artwork on a slow link shows blank for about the
+request time when scrolling back. Kill switch:
+`localStorage['grid-list:windowing'] = 'off'`; added October 2026, remove it
+two releases later.
+
 ## EPG Views
 
 The shared timeline and list still contain local dark surfaces, blue selection
@@ -713,6 +798,11 @@ remain local when the meaning is explicit.
   layouts keep the full EPG-only panel.
 - Keep the EPG content mounted while collapsed so current-program state can
   continue updating.
+- Narrow timeline titles containing Han, kana, Hangul or Bopomofo use native
+  top-to-bottom vertical text without rotation. Other scripts retain the
+  rotated presentation; choose by programme title, not interface locale.
+  Mixed titles keep the browser's `text-orientation: mixed`, and wider cards
+  retain horizontal text.
 - The ribbon renders only the blocks, ticks and day dividers within half a
   viewport of the visible range (`TimelineWindowController` in
   `epg-timeline-window.controller.ts`); the track keeps the full schedule's
@@ -740,18 +830,33 @@ remain local when the meaning is explicit.
 - There is deliberately no "channels hidden, categories visible" state: a
   category click has to bring the channels back anyway. Surfaces without a
   categories rail (M3U, the unified-collection live tab) treat level 2 like
-  level 1 — and so does the live ROOT (no selected category, Xtream `/live`
-  "All Items", Stalker's all-items grid): there is no channels rail to host
-  the way back, so the shell folds the categories rail at level 2 only while
-  the portal store has a selected category (`hasLiveCategorySelection`), and
-  the rail's hide chevron is withheld there too. Level 3 folds it regardless,
-  since the floating restore handle lives in the content area.
+  level 1. The live ROOT (no selected category: Xtream `/live` "All Items",
+  Stalker's all-items grid or its select-a-category placeholder) folds at level
+  2 like any category, so the rail's hide chevron is offered there too. With no
+  channels header to host the way back, each root view renders its own
+  `data-test-id="live-show-categories"` button while
+  `LivePanelsController.isCategoriesRailFolded()` is true: one Xtream button
+  that floats over the header's leading edge (the header reserves the room), kept
+  outside the loading switch so its focus survives the loading-to-ready swap;
+  the Stalker `app-stalker-itv-all-items` header; or a floating handle on the
+  Stalker placeholder and while a Stalker channel plays without a category.
+  Level 3 hides it again in favour of the restore handle. The one exception is
+  a blocked Xtream portal (`XtreamStore.isContentBlocked`):
+  `XtreamContentGateComponent` then replaces the live layout with an error view,
+  so the shell keeps the rail unfolded (`isLiveContentBlocked`) and the rail
+  withholds its hide chevron, rather than hiding the only way back.
 - Xtream Live TV's root view (`/live` with no selected category) follows the
   same paginated `All Items` shell as VOD and Series: a widget header with the
   total channel count, page-size controls, and page navigation above the shared
   `app-grid-list`. Use the grid list's logo-oriented live variant so channel
-  logos stay contained in 16:9 thumbnails instead of being cropped like
-  VOD/series posters. Selecting a channel from that root grid starts playback,
+  logos stay contained in a compact 72px-high region instead of being cropped
+  like VOD/series posters. The outer card owns the rounding; the logo region
+  joins the title and programme area with straight inner corners. Logo loading
+  placeholders reserve the same height, while channel rows remain unchanged.
+  Channel titles use a single 20px line with ellipsis and the full name in the
+  card's native tooltip; programme metadata follows after 8px without a reserved
+  second title line. Keep the title at 14px and programme text at 12px.
+  Selecting a channel from that root grid starts playback,
   selects the channel's category, highlights the active category and channel,
   and scrolls the category rail plus virtual channels list to the selected rows
   when those rails are visible.
@@ -850,14 +955,14 @@ remain local when the meaning is explicit.
   so focus drops to `<body>`; the side that gains the replacement affordance
   picks it up after its next render via `focusIfFocusLost()`
   (`@iptvnator/portal/shared/util`): the layouts' `LivePanelsController`
-  installs `handoffFocusOnLiveSidebarChange()` over the EFFECTIVE level (on
-  the live root the first category selection folds the rail with no state
-  change) and focuses the floating restore handle at player-only or the
-  show-categories button while the rail is folded, and the shell sidebar,
-  watching the rail's ACTUAL fold state (on the live root the rail stays
-  visible at level 2, so only player-only ↔ visible is a transition there),
-  focuses the control the context panel names (`focusTarget()`: its hide
-  chevron, or its first header action when the chevron is withheld) and,
+  installs `handoffFocusOnLiveSidebarChange()` over the EFFECTIVE level and
+  focuses the floating restore handle at player-only or the show-categories
+  button while the rail is folded. If a view change removes a focused
+  category control while the rail stays folded, the controller passes focus
+  to the replacement show-categories button. The shell sidebar watches the
+  rail's fold state and focuses the control the context panel names
+  (`focusTarget()`: its hide chevron, or its first header action when the
+  chevron is withheld) and,
   while none is rendered (categories loading, a failed load), the
   `tabindex="-1"` aside itself — only on transitions, and never when another
   control still owns focus.
@@ -985,7 +1090,8 @@ in front of 84 px channel cards.
 - The channel list views and `app-channel-list-loading-state` share
   `libs/ui/components/src/lib/styles/_channel-list-layout.scss`. The loading
   state takes the view and hides its headers where the loaded view does
-  (`showHeader`, compact lists).
+  (`showHeader`, compact lists). Group loading and loaded rails both inherit
+  the shared navigation list's top inset so their rows stay aligned.
 - The dashboard rails and `lib-dashboard-rail-skeleton` share
   `libs/workspace/dashboard/feature/src/lib/rails/_dashboard-rail-geometry.scss`.
   A skeleton takes the `layout` and `aspectRatio` of the rail it precedes:
@@ -1104,6 +1210,9 @@ actions (mark watched, download season, reset progress) live in that menu
 and drive the season container's presenters. Collection details also keep
 “View in portal” in that menu, in a navigation group before the provider
 actions, regardless of how many hero buttons are visible.
+At the phone breakpoint, Trailer uses a 44px icon button with its translated
+accessible name. Playback keeps its label and the action row can wrap when
+additional controls or long localized labels need more room.
 
 Every section below the hero (Episodes, Cast & crew, Similar) uses
 `app-detail-section-header`: an 18px/600 title, a muted 12.5px tabular
@@ -1173,6 +1282,12 @@ per-theme tokens in `apps/web/src/_settings-theme.scss`.
   tinted text and no border, so the list never shifts. Back lives in the
   workspace header and Esc runs it. Section pages are defined once in
   `SETTINGS_SECTION_DEFINITIONS` (`libs/workspace/shell/util`).
+- Appearance follows General in App and owns theme palettes, cover size and
+  cover titles. General owns language, startup, channel names and portal
+  connectivity. Sections share one parent form: navigating between them keeps
+  staged edits and the live theme preview without persisting either. Save and
+  Discard apply across sections; dirty markers and search results use the
+  section that owns the control.
 - Each page is a title (26px) and one-line subtitle, then sections: a 14px
   heading, an optional description and action buttons, and a card.
 - Rows (`.setting-item`) are a label column (13.5px title, description
@@ -1225,6 +1340,16 @@ per-theme tokens in `apps/web/src/_settings-theme.scss`.
   role (add `app-dialog__secondary--sm` for dense bulk tools), or
   `mat-button.app-dialog__ghost` for a text action. The footer remains the
   decision row. A separate EPG save explicitly says “Save EPG sources”.
+  The playlist editor's main Save also includes valid pending EPG rows, while
+  the separate action applies only EPG changes immediately. Track draft rows by
+  their form controls and reset the first control in place after applying them,
+  so the displayed input clears along with its value.
+  EPG rows show recorded provenance and a separate global-settings status. Name
+  actions by scope: “Add to global EPG settings”, “Remove from this playlist”,
+  “Remove new source” and “Add another source”. Explain immediate enable/removal
+  versus saving new rows. Keep unselected detected sources in the kit's native
+  disclosure with “Enable for this playlist”; after an action removes or disables
+  its button, move focus to a remaining source action or the add-row action.
 - **Shell.** A dialog's markup is `app-dialog-shell`
   (`@iptvnator/ui/components`): the heading (its `mat-dialog-title`, so
   the container is named by it), an optional subtitle and 40px icon tile
@@ -1263,6 +1388,17 @@ per-theme tokens in `apps/web/src/_settings-theme.scss`.
   surface scrolls the whole dialog, so a stacked footer never squeezes the
   body to a sliver. A dialog without a footer keeps its body scrolling
   there: its header × is its only in-dialog dismissal and stays in place.
+  Read-only account and shortcuts dialogs opt into `bodyFocusable`: the
+  named content region is the first keyboard stop, so PageDown and arrow
+  keys scroll the information without moving the header. Forms keep their
+  first control as the initial stop. The programme dialog's own frame caps
+  its height to the viewport and scrolls its named body, including archive
+  tools and actions; its hero stays outside that scroll region.
+  Account dialogs use a 960px cap, a neutral statistics band and flat detail
+  sections. Phone statistics use two columns while detail rows stack; an
+  unpaired Stalker statistic spans the row. Status text uses the theme's
+  success/expiry text tokens, and
+  loading shimmer stops under reduced motion and never remains on errors.
 - **Dismiss.** The shell's header × (named "Close dialog", so a footer
   "Close" stays the only button of that name) and the footer
   "Cancel"/"Close" both dismiss; a dialog never adds a second footer
@@ -1292,6 +1428,11 @@ per-theme tokens in `apps/web/src/_settings-theme.scss`.
   never depends on the entry point: `EpgProgrammeDialogService` opens the
   programme dialog at 540px from the timeline, list, guide and channel rows,
   with a panel class that scopes its surface overrides.
+  Playlist editors use `playlistInfoDialogConfig()` from every entry point:
+  its `md` preset supplies both width and the explicit viewport height cap that
+  the short-window surface scroller needs. EPG rows keep their action buttons in
+  one horizontal group below the full-width field on phones; field columns have
+  `min-width: 0` and draft rows have an explicit gap.
 - **Destructive actions.** Material only emits `warn` button colors for M2
   themes, so the `color` input is a no-op here. A button that removes or
   discards user data uses the global `.app-destructive-button` class from
@@ -1354,6 +1495,11 @@ that renders one adds `providers: [provideFormFieldDefaults()]`
 provide the defaults, because the token import there would load Material's
 form field and `@angular/forms` on startup. `pnpm run
 ui:form-field-defaults:validate` (in CI) reports a missing provider.
+
+Outlined labels use `--app-muted-color` at rest and on hover, and
+`--app-selection-text-color` on focus. Measure small text against the actual
+raised field fill, including alpha compositing; the surrounding dialog surface
+alone does not prove 4.5:1 contrast. Keep the kit's field shape and fill unchanged.
 
 A `mat-select` belongs inside a form. Its option panel is styled once in
 `m3-theme.scss` to match the kit menu (a bordered 10px panel, 36px rows at
@@ -1449,6 +1595,13 @@ text) and `subject` (pasted text in the add flow). Use
 `getPlaylistSourceIcon()` for a stored playlist. An icon never stands for two
 providers, and the Dashboard rail icon is never a provider icon.
 
+## Search and Collection Empty States
+
+Search, Favorites and Recently Viewed use the shared no-data view from
+`@iptvnator/playlist/shared/ui` for their empty states. Supply the relevant
+icon and translated copy so they share typography and motion. The entrance
+animation respects reduced motion.
+
 ## Icon Names
 
 `<mat-icon>` draws its text through the ligatures of the Material Icons font
@@ -1491,7 +1644,10 @@ but the component has not.
   it has to opt into the row direction — a nested list that keeps
   `flex-direction: column` stacks its links out of the bar and over the header.
   The bar scrolls sideways once a portal contributes its sections, and the
-  settings link is `position: sticky` so it never scrolls out of reach.
+  settings link is `position: sticky` so it never scrolls out of reach. In
+  standalone mode, the inset for the status bar sits above the 52px scroller.
+- In narrow catalog panes, Refine shares a row with the category title and
+  count. Sort and filter chips wrap below when present.
 - The shell context panel (categories, filters, settings sections) is an
   off-canvas drawer: hidden by default so the route content owns the full
   pane, opened from a toggle in the workspace header, closed by selection,
@@ -1606,6 +1762,68 @@ consumers must not reset these with a later `font: inherit` shorthand. Different
 content rows retain their own typography and density.
 
 ## Theme Guidance
+
+The built-in catalog and theme-value normalization live in
+`libs/shared/interfaces/src/lib/theme-presets.ts`. Keep existing persisted
+identifiers stable. Unknown saved values normalize to System; partial settings
+updates that omit the theme preserve the saved choice.
+
+The palette picker uses the existing keyboard-accessible radio directives. Seven
+named miniature samples use the same app tokens as the real theme, arranged in
+three columns on wide settings containers and two on narrow ones. System is a
+separate row in the same group. While System is selected, a pair of rows below
+it chooses the preset for a light device (Light or Cream) and for a dark one
+(Dark, Mocha, Night Owl, Black OLED or High Contrast). These choices are stored
+as `systemLightTheme` and `systemDarkTheme`. `normalizeSystemTheme()` falls
+back to Light or Dark for a missing value or one of the other mode. Selection
+previews immediately, Save persists it, and Discard restores the saved choice
+and its System listener when needed. The pair is applied before the theme,
+since System resolves through it.
+
+App palette declarations live in `apps/web/src/_theme-palettes.scss`.
+`m3-theme.scss` includes them for body contexts, and the lazy settings theme
+picker includes them for decorative preview contexts.
+`_warm-theme.scss` supplies the Material color ramps for Cream/Mocha;
+`_dark-variant-themes.scss` supplies Night Owl, Black OLED and High Contrast.
+Night Owl uses navy surfaces and cool accents. Black OLED uses a black
+background and raised graphite surfaces for cards, inputs and overlays. High
+Contrast uses black surfaces, white text, a yellow selection, visible widget
+borders and separators, and a 3px focus ring. The `--app-focus-ring-width`
+token overrides the mixin's 2px default. High Contrast shares the Black OLED
+base and overrides its own app and Material roles. Material component colors
+reference `--mat-sys-*` roles through aliases on `html`, `body`, and dark theme
+contexts. The aliases resolve against the active preset and accent on `body`
+and the dark colors in nested panels. Samples emit only their seven displayed
+app roles from the same palette mixins.
+Dark variants emit their app overrides over the shared `.dark-theme` defaults
+on the same body element; their mixins skip repeating the full dark palette.
+Light and Cream likewise share the `.light-theme` defaults on the body; `html`
+retains the same light fallback. Cream emits only its differing app roles.
+Adding a built-in preset requires catalog metadata, app/Material colors,
+localized naming, and computed contrast/persistence coverage. Do not introduce
+per-component preset conditions or duplicate sample-only palettes. Typography,
+spacing, media artwork and the fixed over-video control palette stay unchanged.
+
+An optional accent (`themeAccent`, ids in
+`libs/shared/interfaces/src/lib/theme-accent.ts`) lays a user colour over any
+preset. A missing or `null` value keeps the preset's own selection colour.
+`SettingsService` loads `theme-accent-tokens.ts` on the first custom accent,
+including a saved accent at startup. The module derives the roles against the
+active preset's surface tokens. The service sets the roles inline on `<body>`
+with a `data-theme-accent` attribute. Only the accent's OKLCH lightness moves.
+The accent is also text (badges, selected labels), so it keeps 4.5:1 against
+every surface and its plain selection tint; the selection-text role keeps
+4.5:1 on the strongest tint too. One on-accent colour, used for
+`--app-selection-on-color` and `--mat-sys-on-primary`, keeps 4.5:1 on the
+accent, on Material primary and across the empty-state CTA gradient toward
+the heading ink; the accent darkens or lightens further until one does. The
+roles are re-derived on every theme change, including System's OS switches.
+The swatches preview each accent in the current theme. The "theme colour"
+swatch reads the preset's own colour from a `data-theme-preview` context.
+Discard and completing a playlist
+backup import restore the saved appearance. The accent's specs read the shipped
+palettes, so a new preset or palette change re-runs every accent's contrast check.
+
 
 ### Light Theme
 

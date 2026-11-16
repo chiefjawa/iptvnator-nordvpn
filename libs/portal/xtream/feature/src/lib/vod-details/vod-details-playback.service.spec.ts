@@ -7,6 +7,7 @@ import {
 } from '@iptvnator/portal/shared/util';
 import {
     XTREAM_DATA_SOURCE,
+    type XtreamPlaylistData,
     XtreamStore,
 } from '@iptvnator/portal/xtream/data-access';
 import {
@@ -17,6 +18,7 @@ import { PlaybackHistoryGate } from '@iptvnator/playback/data-access';
 import type {
     PlaybackPositionData,
     PlayerContentInfo,
+    XtreamVodDetails,
     XtreamVodInfo,
 } from '@iptvnator/shared/interfaces';
 import { VodDetailsPlaybackService } from './vod-details-playback.service';
@@ -37,6 +39,7 @@ describe('VodDetailsPlaybackService — external session ownership', () => {
     let positionListener: ((data: PlaybackPositionData) => void) | undefined;
     const addRecentItem = jest.fn();
     const xtreamDataSource = {
+        supportsPortableHistory: jest.fn().mockResolvedValue(false),
         getContentByXtreamId: jest.fn(),
         addRecentItem: jest.fn(),
     };
@@ -46,7 +49,9 @@ describe('VodDetailsPlaybackService — external session ownership', () => {
     const openExternalPlayback = jest.fn();
     const supersedePendingSwitch = jest.fn();
     const activeSource = signal<PlayerContentInfo | null>(null);
-    const currentPlaylist = signal({ id: ROUTE_PLAYLIST });
+    const currentPlaylist = signal<
+        Pick<XtreamPlaylistData, 'id' | 'userAgent' | 'referrer' | 'origin'>
+    >({ id: ROUTE_PLAYLIST });
     const routeVodId = signal(ROUTE_VOD_ID);
     const getPlaybackPosition = jest.fn();
 
@@ -87,6 +92,7 @@ describe('VodDetailsPlaybackService — external session ownership', () => {
     }
 
     beforeEach(() => {
+        xtreamDataSource.supportsPortableHistory.mockResolvedValue(false);
         activeSession.set(null);
         activeSource.set(null);
         currentPlaylist.set({ id: ROUTE_PLAYLIST });
@@ -161,6 +167,82 @@ describe('VodDetailsPlaybackService — external session ownership', () => {
             vodInfo: signal(null),
             activeSource,
             supersedePendingSwitch,
+        });
+    });
+
+    describe('ordinary movie playback headers', () => {
+        const movie = {
+            movie_data: {
+                stream_id: ROUTE_VOD_ID,
+                name: 'Synthetic movie',
+                container_extension: 'mkv',
+            },
+        } as XtreamVodDetails;
+
+        it.each([
+            ['playVod', 'inline'],
+            ['resumeVod', 'inline'],
+            ['playVod', 'mpv'],
+            ['resumeVod', 'mpv'],
+            ['playVod', 'vlc'],
+            ['resumeVod', 'vlc'],
+        ] as const)(
+            'carries playlist headers for %s through %s',
+            async (action, target) => {
+                currentPlaylist.set({
+                    id: ROUTE_PLAYLIST,
+                    userAgent: 'SyntheticPlayer/1.0',
+                    referrer: 'https://portal.example/player',
+                    origin: 'https://portal.example',
+                });
+                service.routePlaybackPosition.set(
+                    positionFor(ROUTE_PLAYLIST, ROUTE_VOD_ID, 120)
+                );
+                const player = TestBed.inject(PORTAL_PLAYER);
+                (player.isEmbeddedPlayer as jest.Mock).mockReturnValue(
+                    target === 'inline'
+                );
+
+                await service[action](
+                    movie,
+                    target === 'inline' ? undefined : target
+                );
+
+                const expected = expect.objectContaining({
+                    userAgent: 'SyntheticPlayer/1.0',
+                    referer: 'https://portal.example/player',
+                    origin: 'https://portal.example',
+                    ...(action === 'resumeVod' ? { startTime: 120 } : {}),
+                    contentInfo: {
+                        playlistId: ROUTE_PLAYLIST,
+                        contentXtreamId: ROUTE_VOD_ID,
+                        contentType: 'vod',
+                    },
+                });
+                if (target === 'inline') {
+                    expect(service.inlinePlayback()).toEqual(expected);
+                } else {
+                    expect(openExternalPlayback).toHaveBeenCalledWith(
+                        expected,
+                        target
+                    );
+                }
+            }
+        );
+
+        it('does not reuse a previous playlist header override', () => {
+            currentPlaylist.set({
+                id: ROUTE_PLAYLIST,
+                userAgent: 'SyntheticPlayer/1.0',
+            });
+            expect(service.buildVodPlayback(movie, false)?.userAgent).toBe(
+                'SyntheticPlayer/1.0'
+            );
+            currentPlaylist.set({ id: 'synthetic-other' });
+            const playback = service.buildVodPlayback(movie, false);
+            expect(playback?.userAgent).toBeUndefined();
+            expect(playback?.referer).toBeUndefined();
+            expect(playback?.origin).toBeUndefined();
         });
     });
 
@@ -291,7 +373,7 @@ describe('VodDetailsPlaybackService — external session ownership', () => {
             'movie'
         );
         expect(xtreamDataSource.addRecentItem).toHaveBeenCalledWith(
-            { id: 77, type: 'movie' },
+            { id: 77, type: 'movie', providerId: ROUTE_VOD_ID },
             ROUTE_PLAYLIST,
             undefined,
             expect.objectContaining({
@@ -303,11 +385,15 @@ describe('VodDetailsPlaybackService — external session ownership', () => {
     });
 
     it.each([
-        ['the API-only data source', false, 1],
-        ['the SQLite data source', true, 0],
+        ['the API-only data source', false, 1, false],
+        ['the SQLite data source', true, 0, false],
+        ['verified portable native history', true, 1, true],
     ])(
         'keys a late, uncached write by Xtream id only for %s',
-        async (_label, sqlite: boolean, saves: number) => {
+        async (_label, sqlite: boolean, saves: number, portable: boolean) => {
+            xtreamDataSource.supportsPortableHistory.mockResolvedValue(
+                portable
+            );
             // A partial Electron bridge still selects the API-only source.
             jest.spyOn(
                 TestBed.inject(RuntimeCapabilitiesService),
@@ -324,13 +410,16 @@ describe('VodDetailsPlaybackService — external session ownership', () => {
             TestBed.inject(PlaybackHistoryGate).confirm({
                 streamUrls: ['https://example.com/route.mkv'],
             });
-            await Promise.resolve();
-            await Promise.resolve();
+            await new Promise((resolve) => setTimeout(resolve, 0));
 
             expect(xtreamDataSource.addRecentItem).toHaveBeenCalledTimes(saves);
             if (saves) {
                 expect(xtreamDataSource.addRecentItem).toHaveBeenCalledWith(
-                    { id: ROUTE_VOD_ID, type: 'movie' },
+                    {
+                        id: ROUTE_VOD_ID,
+                        type: 'movie',
+                        providerId: ROUTE_VOD_ID,
+                    },
                     ROUTE_PLAYLIST,
                     undefined,
                     expect.objectContaining({ title: 'Slow external launch' })

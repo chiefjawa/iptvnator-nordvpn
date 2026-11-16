@@ -32,6 +32,12 @@ const progress = (
 });
 test('historical episodes gain their exact parent title without changing identity, resume or commands', () => {
     const data = initialData();
+    data.sources = ['a', 'b'].map((id) => ({
+        id,
+        name: 'Synthetic source',
+        provider: 'xtream',
+        url: 'https://example.test',
+    }));
     data.activeId = 'a';
     const saved = progress('ep', 42);
     saved.item = {
@@ -50,7 +56,7 @@ test('historical episodes gain their exact parent title without changing identit
         ...saved.item,
         id: 'show',
         kind: 'series' as const,
-        title: 'Ted Lasso s04',
+        title: 'Synthetic Story s04',
         year: '2026',
         poster: 'https://example.test/show.jpg',
     };
@@ -59,7 +65,7 @@ test('historical episodes gain their exact parent title without changing identit
         data
     );
     const next = recoverSeriesContext(data, [parent]);
-    assert.equal(mediaTitle(next.history[0].item), 'Ted Lasso s04');
+    assert.equal(mediaTitle(next.history[0].item), 'Synthetic Story s04');
     assert.equal(next.history[0].item.title, 'Episode 1');
     assert.equal(next.positions.ep.seconds, saved.seconds);
     assert.equal(next.positions.ep.updated, 42);
@@ -112,8 +118,14 @@ test('saved parent context survives JSON storage without copying cached episode 
         episode
     );
 });
-test('continuation is source-scoped, newest first, limited and never mutates saved history', () => {
+test('continuation combines sources, newest first, limited and never mutates saved history', () => {
     const data = initialData();
+    data.sources = ['a', 'b'].map((id) => ({
+        id,
+        name: 'Synthetic source',
+        provider: 'xtream',
+        url: 'https://example.test',
+    }));
     data.activeId = 'a';
     const foreign = progress('foreign', 100);
     foreign.item.sourceId = 'b';
@@ -131,16 +143,22 @@ test('continuation is source-scoped, newest first, limited and never mutates sav
     const saved = JSON.stringify(data);
     assert.deepEqual(
         continueWatching(data, 3).map((p) => p.item.id),
-        ['new', 'unknown-duration', 'old']
+        ['foreign', 'new', 'unknown-duration']
     );
     assert.deepEqual(
         continueWatching(data, 1).map((p) => p.item.id),
-        ['new']
+        ['foreign']
     );
     assert.equal(JSON.stringify(data), saved);
 });
 test('one latest episode per series; completed latest episode cannot revive an older unfinished episode', () => {
     const data = initialData();
+    data.sources = ['a', 'b'].map((id) => ({
+        id,
+        name: 'Synthetic source',
+        provider: 'xtream',
+        url: 'https://example.test',
+    }));
     data.activeId = 'a';
     const episodes = ['e1', 'e2', 'e3', 'other'].map((id, i) => {
         const p = progress(id, i + 1);
@@ -238,4 +256,44 @@ test('unknown saved fields survive hydration and subsequent progress writes', ()
         saved.retainedExtension
     );
     assert.equal(updated.history[0].item.id, 'movie');
+});
+
+test('global continuation keeps equal provider ids separate across sources', () => {
+    const data = initialData();
+    data.sources = ['a', 'b'].map((id) => ({
+        id,
+        name: 'Synthetic source',
+        provider: 'xtream',
+        url: 'https://example.test',
+    }));
+    const first = progress('synthetic-first', 10);
+    const second = progress('synthetic-second', 11);
+    first.item = {
+        ...first.item,
+        kind: 'episode',
+        parentId: 'synthetic-parent',
+        providerId: 'same-provider-id',
+    };
+    second.item = {
+        ...second.item,
+        sourceId: 'b',
+        kind: 'episode',
+        parentId: 'synthetic-parent',
+        providerId: 'same-provider-id',
+    };
+    data.history = [first, second];
+    assert.deepEqual(
+        continueWatching(data).map((p) => p.item.sourceId),
+        ['b', 'a']
+    );
+    data.activeId = 'unrelated';
+    assert.deepEqual(
+        continueWatching(data).map((p) => p.item.sourceId),
+        ['b', 'a']
+    );
+    data.history = [{ ...second, seconds: 3590, updated: 12 }, first, second];
+    assert.deepEqual(
+        continueWatching(data).map((p) => p.item.sourceId),
+        ['a']
+    );
 });

@@ -58,6 +58,7 @@ test.describe('Xtream VOD Details', () => {
         const app = await launchElectronApp(dataDir);
 
         try {
+            await app.mainWindow.clock.install();
             await addXtreamPortal(app.mainWindow, {
                 ...emptyMetadataCredentials,
                 name: 'Xtream Empty Metadata',
@@ -129,6 +130,30 @@ test.describe('Xtream VOD Details', () => {
                     'app-portal-inline-player .player-shell__title'
                 )
             ).toContainText(movieTitle);
+
+            const page = app.mainWindow;
+            const player = page.locator('app-portal-inline-player');
+            const header = player.locator('.player-shell__header');
+            const copy = player.getByRole('button', {
+                name: 'Copy Stream URL',
+            });
+            const close = player.getByRole('button', { name: 'Close player' });
+            // Exercise the real button without overwriting the host clipboard.
+            await page.evaluate(() => {
+                document.execCommand = () => true;
+            });
+            await player
+                .locator('.player-shell')
+                .hover({ position: { x: 8, y: 8 } });
+            await copy.click();
+            await expect(copy).toBeFocused();
+            await page.clock.fastForward(3500);
+            await expect(header).toHaveCSS('pointer-events', 'auto');
+            await expect(header).toHaveCSS('opacity', '1');
+
+            await page.keyboard.press('Tab');
+            await expect(close).toBeFocused();
+            await expect(header).toHaveCSS('opacity', '1');
         } finally {
             await closeElectronApp(app);
         }

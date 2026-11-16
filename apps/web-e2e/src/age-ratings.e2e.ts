@@ -47,7 +47,7 @@ for (const type of ['vod', 'series'] as const) {
         request,
     }) => {
         test.setTimeout(90_000);
-        await request.post(`${XTREAM_SERVER}/reset`);
+        await request.post(`${XTREAM_SERVER}/reset?username=user1&password=pass1`);
         const tmdb = await interceptAgeRatingTmdb(page);
         await setAgeRatingCountry(page, 'DE', true);
         await interceptXtreamRequests(page);
@@ -65,7 +65,9 @@ for (const type of ['vod', 'series'] as const) {
             type === 'vod' ? '12 · DE' : '16 · DE'
         );
         const detailUrl = page.url();
-        const before = tmdb.requests();
+        // Season details load in the background; region changes must reuse
+        // the search and classification metadata, independent of that work.
+        const before = tmdb.classificationRequests();
         expect(tmdb.mediaTypes).toContain(type === 'vod' ? 'movie' : 'tv');
         await setAgeRatingCountry(page, 'FR');
         await page.locator('[data-test-id="workspace-header-back"]').click();
@@ -73,7 +75,7 @@ for (const type of ['vod', 'series'] as const) {
         await expect(ageRating(page)).toHaveText(
             type === 'vod' ? 'PG-13 · US' : 'TV-14 · US'
         );
-        expect(tmdb.requests()).toBe(before);
+        expect(tmdb.classificationRequests()).toBe(before);
         const button = ageRating(page).getByRole('button');
         await button.focus();
         await expect(button).toHaveAttribute(
@@ -112,7 +114,7 @@ test('@web @metadata provider age rating is available without TMDB opt-in', asyn
     page,
     request,
 }) => {
-    await request.post(`${XTREAM_SERVER}/reset`);
+    await request.post(`${XTREAM_SERVER}/reset?username=user1&password=pass1`);
     const tmdb = await interceptAgeRatingTmdb(page);
     await setAgeRatingCountry(page, 'DE');
     await interceptXtreamRequests(page);

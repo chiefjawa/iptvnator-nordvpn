@@ -1,23 +1,13 @@
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { signalStore } from '@ngrx/signals';
-import { of } from 'rxjs';
+import { RuntimeCapabilitiesService } from '@iptvnator/services';
 import {
-    DatabaseService,
-    PlaylistsService,
-    RuntimeCapabilitiesService,
-} from '@iptvnator/services';
+    CONNECTION_KEY,
+    prepareSourceConnection,
+} from '@iptvnator/services/source-sync/connection';
 import { XTREAM_DATA_SOURCE } from './data-sources/xtream-data-source.interface';
 import { withRecentItems } from './with-recent-items';
-
-jest.mock('@iptvnator/portal/shared/util', () => ({
-    createLogger: () => ({
-        debug: jest.fn(),
-        info: jest.fn(),
-        warn: jest.fn(),
-        error: jest.fn(),
-    }),
-}));
 
 const TestRecentItemsStore = signalStore(withRecentItems());
 
@@ -25,25 +15,14 @@ describe('withRecentItems', () => {
     const originalElectron = window.electron;
     const runtime = { supportsXtreamSqliteDataSource: false };
     let store: InstanceType<typeof TestRecentItemsStore>;
-    let databaseService: {
-        clearGlobalRecentlyViewed: jest.Mock;
-        clearPlaylistRecentItems: jest.Mock;
-        getContentByXtreamId: jest.Mock;
-        getRecentItems: jest.Mock;
-        removeRecentItem: jest.Mock;
-        setContentMetadataIfMissing: jest.Mock;
-    };
     let dataSource: {
         addRecentItem: jest.Mock;
+        supportsPortableHistory: jest.Mock;
         clearRecentItems: jest.Mock;
         getContentByXtreamId: jest.Mock;
         getRecentItems: jest.Mock;
         removeRecentItem: jest.Mock;
         setContentMetadataIfMissing: jest.Mock;
-    };
-    let playlistsService: {
-        clearPlaylistRecentlyViewed: jest.Mock;
-        getAllPlaylists: jest.Mock;
     };
 
     beforeEach(() => {
@@ -53,27 +32,9 @@ describe('withRecentItems', () => {
             configurable: true,
         });
 
-        databaseService = {
-            clearGlobalRecentlyViewed: jest.fn().mockResolvedValue(undefined),
-            clearPlaylistRecentItems: jest.fn().mockResolvedValue(undefined),
-            getContentByXtreamId: jest.fn(),
-            getRecentItems: jest.fn().mockResolvedValue([
-                {
-                    id: 3941697,
-                    title: 'Krypton',
-                    type: 'series',
-                    poster_url: 'https://example.com/krypton.png',
-                    backdrop_url: 'https://example.com/krypton-backdrop.png',
-                    viewed_at: '2026-04-21T20:42:27.000Z',
-                    xtream_id: 290,
-                    category_id: 17,
-                },
-            ]),
-            removeRecentItem: jest.fn().mockResolvedValue(undefined),
-            setContentMetadataIfMissing: jest.fn().mockResolvedValue(undefined),
-        };
         dataSource = {
             addRecentItem: jest.fn().mockResolvedValue(undefined),
+            supportsPortableHistory: jest.fn().mockResolvedValue(false),
             clearRecentItems: jest.fn().mockResolvedValue(undefined),
             getContentByXtreamId: jest.fn(),
             getRecentItems: jest.fn().mockResolvedValue([
@@ -91,28 +52,13 @@ describe('withRecentItems', () => {
             removeRecentItem: jest.fn().mockResolvedValue(undefined),
             setContentMetadataIfMissing: jest.fn().mockResolvedValue(undefined),
         };
-        playlistsService = {
-            clearPlaylistRecentlyViewed: jest
-                .fn()
-                .mockReturnValue(of(undefined)),
-            getAllPlaylists: jest.fn().mockReturnValue(of([])),
-        };
-
         TestBed.configureTestingModule({
             providers: [
                 TestRecentItemsStore,
                 { provide: RuntimeCapabilitiesService, useValue: runtime },
                 {
-                    provide: DatabaseService,
-                    useValue: databaseService,
-                },
-                {
                     provide: XTREAM_DATA_SOURCE,
                     useValue: dataSource,
-                },
-                {
-                    provide: PlaylistsService,
-                    useValue: playlistsService,
                 },
             ],
         });
@@ -128,6 +74,147 @@ describe('withRecentItems', () => {
         });
     });
 
+    it('refreshes the loaded source after history changes and detaches on destroy', async () => {
+        dataSource.getRecentItems.mockResolvedValue([]);
+        store.loadRecentItems({ id: 'synthetic-source' });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(store.recentItems()).toEqual([]);
+        dataSource.getRecentItems.mockResolvedValue([
+            {
+                id: null,
+                xtream_id: 42,
+                type: 'series',
+                title: 'Synthetic shared series',
+                poster_url: '',
+                category_id: '',
+            },
+        ]);
+        window.dispatchEvent(new Event('iptvnator-history-changed'));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(store.recentItems()).toEqual([
+            expect.objectContaining({ xtream_id: 42, type: 'series' }),
+        ]);
+        dataSource.getRecentItems.mockResolvedValue([]);
+        window.dispatchEvent(new Event('iptvnator-history-changed'));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(store.recentItems()).toEqual([]);
+        const calls = dataSource.getRecentItems.mock.calls.length;
+        TestBed.resetTestingModule();
+        window.dispatchEvent(new Event('iptvnator-history-changed'));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(dataSource.getRecentItems).toHaveBeenCalledTimes(calls);
+    });
+
+    it('discards a delayed history reload and stops refreshing a replaced source', async () => {
+        const connection = localStorage.getItem(CONNECTION_KEY);
+        const key =
+            'iptvnator-server:synthetic-instance:history-source-epoch:synthetic-source';
+        const epoch = localStorage.getItem(key);
+        try {
+            localStorage.setItem(
+                CONNECTION_KEY,
+                JSON.stringify({
+                    apiUrl: 'https://history.example/api',
+                    instanceId: 'synthetic-instance',
+                })
+            );
+            await prepareSourceConnection();
+            let complete!: (items: unknown[]) => void;
+            let start!: () => void;
+            const started = new Promise<void>((resolve) => {
+                start = resolve;
+            });
+            dataSource.getRecentItems.mockImplementation(() => {
+                start();
+                return new Promise((resolve) => {
+                    complete = resolve;
+                });
+            });
+            store.loadRecentItems({ id: 'synthetic-source' });
+            await started;
+            localStorage.setItem(key, 'replacement');
+            complete([
+                {
+                    id: 42,
+                    xtream_id: 42,
+                    type: 'series',
+                    title: 'Synthetic retired series',
+                },
+            ]);
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            expect(store.recentItems()).toEqual([]);
+            const calls = dataSource.getRecentItems.mock.calls.length;
+            window.dispatchEvent(new Event('iptvnator-history-changed'));
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            expect(dataSource.getRecentItems).toHaveBeenCalledTimes(calls);
+            dataSource.getContentByXtreamId.mockImplementation(async () => {
+                localStorage.setItem(key, 'retired-during-metadata-lookup');
+                return { id: 42 };
+            });
+            await store.backfillContentMetadata({
+                xtreamId: 42,
+                contentType: 'series',
+                playlist: signal({ id: 'synthetic-source' }),
+                patch: { tmdbId: 100 },
+            });
+            expect(
+                dataSource.setContentMetadataIfMissing
+            ).not.toHaveBeenCalled();
+        } finally {
+            if (connection == null) localStorage.removeItem(CONNECTION_KEY);
+            else localStorage.setItem(CONNECTION_KEY, connection);
+            if (epoch == null) localStorage.removeItem(key);
+            else localStorage.setItem(key, epoch);
+            await prepareSourceConnection();
+        }
+    });
+
+    it('keeps a missing native row ID separate from the display key', async () => {
+        dataSource.getRecentItems.mockResolvedValue([
+            {
+                id: null,
+                xtream_id: 42,
+                type: 'live',
+                title: 'Synthetic received channel',
+                poster_url: '',
+                category_id: '',
+                viewed_at: '2026-11-06T12:00:00Z',
+            },
+        ]);
+        store.loadRecentItems({ id: 'synthetic-source' });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(store.recentItems()[0]).toMatchObject({
+            id: 'recent:live:42',
+            content_id: null,
+            xtream_id: 42,
+        });
+    });
+
+    it.each([false, true])(
+        'records a provider-only native start only for a verified portable source (%s)',
+        async (portable) => {
+            runtime.supportsXtreamSqliteDataSource = true;
+            dataSource.getContentByXtreamId.mockResolvedValue(null);
+            dataSource.supportsPortableHistory.mockResolvedValue(portable);
+            store.addRecentItem({
+                xtreamId: 42,
+                contentType: 'movie',
+                playlist: signal({ id: 'synthetic-source' }),
+                playedContent: { title: 'Synthetic movie' },
+            });
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            expect(dataSource.addRecentItem).toHaveBeenCalledTimes(
+                portable ? 1 : 0
+            );
+            if (portable)
+                expect(dataSource.addRecentItem).toHaveBeenCalledWith(
+                    { id: 42, type: 'movie', providerId: 42 },
+                    'synthetic-source',
+                    undefined,
+                    { title: 'Synthetic movie' }
+                );
+        }
+    );
     it('records the played SQLite duplicate using its displayed identity', async () => {
         runtime.supportsXtreamSqliteDataSource = true;
         dataSource.getContentByXtreamId.mockImplementation(
@@ -154,7 +241,7 @@ describe('withRecentItems', () => {
             { tmdbId: 100, releaseYear: 1995 }
         );
         expect(dataSource.addRecentItem).toHaveBeenCalledWith(
-            { id: 2, type: 'movie' },
+            { id: 2, type: 'movie', providerId: 42 },
             'p',
             undefined,
             playedContent
@@ -182,7 +269,7 @@ describe('withRecentItems', () => {
             'series'
         );
         expect(dataSource.addRecentItem).toHaveBeenCalledWith(
-            { id: 3941697, type: 'series' },
+            { id: 3941697, type: 'series', providerId: 290 },
             'playlist-1',
             undefined
         );
@@ -212,11 +299,10 @@ describe('withRecentItems', () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
 
         expect(dataSource.addRecentItem).toHaveBeenCalledWith(
-            { id: 1767451, type: 'movie' },
+            { id: 1767451, type: 'movie', providerId: 1767451 },
             'playlist-1',
             undefined
         );
-        expect(databaseService.getRecentItems).not.toHaveBeenCalled();
     });
 
     it('normalizes route-param Xtream IDs before using the PWA recent fallback', async () => {
@@ -239,7 +325,7 @@ describe('withRecentItems', () => {
             'movie'
         );
         expect(dataSource.addRecentItem).toHaveBeenCalledWith(
-            { id: 1767451, type: 'movie' },
+            { id: 1767451, type: 'movie', providerId: 1767451 },
             'playlist-1',
             undefined
         );
@@ -262,7 +348,7 @@ describe('withRecentItems', () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
 
         expect(dataSource.addRecentItem).toHaveBeenCalledWith(
-            { id: 3941697, type: 'series' },
+            { id: 3941697, type: 'series', providerId: 290 },
             'playlist-1',
             'https://example.com/krypton-backdrop.png'
         );
@@ -331,10 +417,6 @@ describe('withRecentItems', () => {
             { backdropUrl: 'https://example.com/krypton-backdrop.png' }
         );
         expect(dataSource.addRecentItem).not.toHaveBeenCalled();
-        expect(databaseService.getContentByXtreamId).not.toHaveBeenCalled();
-        expect(
-            databaseService.setContentMetadataIfMissing
-        ).not.toHaveBeenCalled();
     });
 
     it('clears recent items through the active data source in PWA', async () => {
@@ -347,47 +429,6 @@ describe('withRecentItems', () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
 
         expect(dataSource.clearRecentItems).toHaveBeenCalledWith('playlist-1');
-        expect(databaseService.clearPlaylistRecentItems).not.toHaveBeenCalled();
-        expect(store.recentItems()).toEqual([]);
-    });
-
-    it('clears Xtream recent items during global PWA clear', async () => {
-        Object.defineProperty(window, 'electron', {
-            value: undefined,
-            configurable: true,
-        });
-        playlistsService.getAllPlaylists.mockReturnValue(
-            of([
-                {
-                    _id: 'xtream-1',
-                    serverUrl: 'https://xtream.example.com',
-                },
-                {
-                    _id: 'm3u-1',
-                },
-                {
-                    _id: 'stalker-1',
-                    serverUrl: 'https://stalker.example.com',
-                    macAddress: '00:11:22:33:44:55',
-                },
-            ])
-        );
-
-        await store.clearGlobalRecentlyViewed();
-
-        expect(
-            databaseService.clearGlobalRecentlyViewed
-        ).not.toHaveBeenCalled();
-        expect(dataSource.clearRecentItems).toHaveBeenCalledWith('xtream-1');
-        expect(
-            playlistsService.clearPlaylistRecentlyViewed
-        ).toHaveBeenCalledWith('m3u-1');
-        expect(
-            playlistsService.clearPlaylistRecentlyViewed
-        ).toHaveBeenCalledWith('stalker-1');
-        expect(
-            playlistsService.clearPlaylistRecentlyViewed
-        ).not.toHaveBeenCalledWith('xtream-1');
         expect(store.recentItems()).toEqual([]);
     });
 
@@ -408,7 +449,6 @@ describe('withRecentItems', () => {
             { id: 3941697, type: 'series' },
             'playlist-1'
         );
-        expect(databaseService.removeRecentItem).not.toHaveBeenCalled();
         expect(store.recentItems()).toEqual([
             expect.objectContaining({
                 id: 3941697,
@@ -425,7 +465,6 @@ describe('withRecentItems', () => {
             3941697,
             'playlist-1'
         );
-        expect(databaseService.removeRecentItem).not.toHaveBeenCalled();
         expect(store.recentItems()).toEqual([
             expect.objectContaining({
                 id: 3941697,
@@ -448,7 +487,7 @@ describe('withRecentItems', () => {
         });
         await new Promise((resolve) => setTimeout(resolve, 0));
         expect(dataSource.addRecentItem).toHaveBeenCalledWith(
-            { id: 42, type: 'movie' },
+            { id: 42, type: 'movie', providerId: 42 },
             'playlist-1',
             undefined,
             playedContent

@@ -30,6 +30,7 @@ import {
     defaultXtreamUsername,
 } from './electron-test-fixtures';
 import { fetchXtreamVodFixture } from './portal-mock-fixtures';
+import { mockExternalPlayerAvailability } from './external-player-availability.fixture';
 
 const epgFixtureXml = `<?xml version="1.0" encoding="UTF-8"?>
 <tv>
@@ -231,6 +232,7 @@ test.describe('Electron Settings', () => {
                 'select-language',
                 'de'
             );
+            await openSettingsSection(firstLaunch.mainWindow, 'appearance');
             await firstLaunch.mainWindow
                 .locator('[data-test-id="DARK_THEME"]')
                 .click();
@@ -280,6 +282,7 @@ test.describe('Electron Settings', () => {
             await expect(
                 secondLaunch.mainWindow.getByTestId('select-language')
             ).toContainText('Deutsch');
+            await openSettingsSection(secondLaunch.mainWindow, 'appearance');
             await expect(
                 secondLaunch.mainWindow.locator('[data-test-id="DARK_THEME"]')
             ).toHaveAttribute('aria-checked', 'true');
@@ -538,6 +541,66 @@ test.describe('Electron Settings', () => {
         // The save the dialog promised actually landed before the close.
         const relaunch = await launchElectronApp(dataDir);
 
+        try {
+            await openSettings(relaunch.mainWindow);
+            await expect(
+                relaunch.mainWindow.getByTestId('select-language')
+            ).toContainText('Deutsch');
+        } finally {
+            await closeElectronApp(relaunch);
+        }
+    });
+
+    test('@settings @electron shares one unsaved-settings decision between navigation and window close', async ({
+        dataDir,
+    }) => {
+        const app = await launchElectronApp(dataDir);
+        const page = app.mainWindow;
+
+        try {
+            await openSettings(page);
+            await selectSettingsOption(page, 'select-language', 'de');
+            await expect(
+                page.getByTestId('settings-unsaved-bar')
+            ).toBeVisible();
+            await page.evaluate(() => window.electron.getWindowState());
+
+            const stay = page.getByTestId('unsaved-dialog-stay');
+            for (const choice of ['stay', 'save']) {
+                await page.locator('a[href$="/workspace/dashboard"]').click();
+                await expect(stay).toHaveCount(1);
+                await page.evaluate(() => {
+                    delete document.documentElement.dataset['closeRequested'];
+                    const stop = window.electron.onWindowCloseRequested?.(
+                        () => {
+                            document.documentElement.dataset['closeRequested'] =
+                                '';
+                            stop?.();
+                        }
+                    );
+                });
+                await app.electronApp.evaluate(({ BrowserWindow }) => {
+                    BrowserWindow.getAllWindows()[0].close();
+                });
+                await expect(
+                    page.locator('html[data-close-requested]')
+                ).toHaveCount(1);
+                await expect(stay).toHaveCount(1);
+                await page.getByTestId(`unsaved-dialog-${choice}`).click();
+
+                if (choice === 'stay') {
+                    await expect(stay).toHaveCount(0);
+                    await expect(
+                        page.getByTestId('settings-unsaved-bar')
+                    ).toBeVisible();
+                }
+            }
+            await expect.poll(() => app.electronApp.windows().length).toBe(0);
+        } finally {
+            await closeElectronApp(app);
+        }
+
+        const relaunch = await launchElectronApp(dataDir);
         try {
             await openSettings(relaunch.mainWindow);
             await expect(
@@ -1070,6 +1133,7 @@ async function installExternalPlayerLaunchCapture(
         ipcMain.handle('OPEN_MPV_PLAYER', captureLaunch('mpv'));
         ipcMain.handle('OPEN_VLC_PLAYER', captureLaunch('vlc'));
     }, externalPlayerLaunchCaptureKey);
+    await mockExternalPlayerAvailability(app, { mpv: true, vlc: true });
 }
 
 async function getExternalPlayerLaunches(

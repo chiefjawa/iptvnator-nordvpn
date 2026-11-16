@@ -23,6 +23,24 @@ const playbackPositionStorageMethods = [
 
 @Injectable({ providedIn: 'root' })
 export class RuntimeCapabilitiesService {
+    get supportsHostedServer(): boolean {
+        // An app VPN session keeps LAN-facing servers off, like remote control.
+        return (
+            this.electronBridge?.appVpnSession !== true &&
+            this.hasElectronMethod('hostedServerControl') &&
+            this.hasElectronMethod('hostedServerAccessCode')
+        );
+    }
+
+    get supportsHistoryStorage(): boolean {
+        return this.isPwa || this.hasElectronMethod('historyLocalRequest');
+    }
+    get supportsFavoritesStorage(): boolean {
+        return this.isPwa || this.hasElectronMethod('favoritesLocalRequest');
+    }
+    get supportsActivityStorage(): boolean {
+        return this.isPwa || this.hasElectronMethod('activityLocalRequest');
+    }
     get environment(): RuntimeEnvironment {
         return this.isElectron ? 'electron' : 'pwa';
     }

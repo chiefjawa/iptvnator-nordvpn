@@ -200,6 +200,13 @@ marker and an `ffrt4://radio/...` command.
 
 ### `get_ordered_list` (seasons — when `movie_id` is present)
 
+The isolated #1844 pagination fixture uses MAC `00:1A:79:18:44:02` and
+`Fixture Paginated` (`movie_id=30`). It serves 20 seasons (IDs 301–320), each
+with 58 episodes in descending order, always paged at 14 rows regardless of
+client hints. The Electron lazy-VOD regression verifies episode 1, episode 58,
+season 20 and playback of season 20's final episode through both portal modes.
+The original `00:1A:79:18:44:01` episode/file-ID fixture remains unchanged.
+
 ```json
 {
   "js": [
@@ -233,7 +240,7 @@ marker and an `ffrt4://radio/...` command.
 }
 ```
 
-The stream URL is selected from a pool of 4 real public HLS test streams. The choice is deterministic based on the `cmd` field's character sum, so the same item always returns the same stream.
+The default video stream URL is selected from a pool of 4 public HLS test streams, deterministically from the `cmd` character sum. Default radio uses the local progressive `/stream/audio.mp4` fixture, because a bare Chromium audio element cannot play HLS. Credential-gated and TV scenarios retain their own media routes.
 
 `cmd_received` and `query_keys_received` are mock-only diagnostics (a real
 portal does not send them): they echo the request's `cmd` after Express' single
@@ -364,6 +371,7 @@ Call `POST /reset?macAddress=<mac>` to clear a MAC's favorites (and its cached
 generated data) between test runs — see "Test Isolation" for why the scoped
 form is the one specs should use.
 
+
 ## Playwright Integration
 
 `apps/web-e2e/playwright.config.ts` registers the mock server as a second `webServer` entry:
@@ -417,9 +425,9 @@ file running in parallel workers, so isolation is per-MAC rather than global:
   spec's session mid-test.
 - `apps/web-e2e/src/stalker.e2e.ts` declares its shared scenario MACs in
   `OWNED_MACS` (the constants live in `stalker-portal.fixture.ts`) and clears
-  them in one batched request. The sibling specs that
-  reach this server (`self-hosted.e2e.ts`, the `sources-pwa` helpers) own a
-  disjoint `00:1A:79:5F:*` range, so neither file can clear the other's state.
+  them in one batched request. `self-hosted.e2e.ts` owns a disjoint
+  `00:1A:79:5F:*` range; PWA source consumers use the test fixture range below,
+  so these suites cannot clear one another's sessions.
 - Within each browser project, tests deliberately share content-scenario MACs
   (their fixture shapes are what the assertions are written against), so the
   file uses `test.describe.configure({ mode: 'serial' })`.
@@ -430,6 +438,17 @@ file running in parallel workers, so isolation is per-MAC rather than global:
   token, login completion, invalidated session or pinned device identity; a
   restarted worker retains the same slot instead of consuming a wider MAC
   value.
+
+PWA source tests reserve `00:1A:79:C0:00:00` through
+`00:1A:79:FF:FF:FF`, outside the fixed scenarios and auth-worker aliases.
+`pwa-mock-state.ts` assigns the fourth byte by Playwright parallel slot
+(`0..63`) and allocates two distinct MACs per test for import and edit.
+The allocator fails on range exhaustion. The fixture resets both MACs at
+setup and after closing the browser context at teardown. Each scoped reset
+clears generated portal data, favorites, adopted/pending auth tokens, pinned
+device identity, login state and watchdog counters for those MACs only.
+The global token counter stays monotonic. Static media bytes are immutable
+and need no reset.
 
 A reset drops the generated content cache, favorites (`data-store.ts`), the
 auth/session record (`auth-store.ts`, including any pinned device identity) and

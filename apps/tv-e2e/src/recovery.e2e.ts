@@ -1,5 +1,12 @@
 import { expect, test } from '@playwright/test';
-import { addSource, backend, nav, start } from './helpers';
+import {
+    fillTvField,
+    addSource,
+    backend,
+    nav,
+    start,
+    cardAction,
+} from './helpers';
 test('storage quota failure is visible and does not claim favorite persistence', async ({
     page,
 }) => {
@@ -95,11 +102,11 @@ test('latest search wins, missing artwork and empty catalogs remain usable', asy
     await addSource(page, 'xtream');
     await nav(page, 'Search');
     const search = page.getByLabel('Search this source');
-    await search.fill('star');
-    await search.fill('zzzz-no-match');
+    await fillTvField(search, 'star');
+    await fillTvField(search, 'zzzz-no-match');
     await expect(page.locator('.poster-card')).toHaveCount(0);
     await expect(page.locator('.empty')).toBeVisible();
-    await search.fill('');
+    await fillTvField(search, '');
     await expect(page.locator('.poster-card')).toHaveCount(60);
     await expect(page.locator('.poster-fallback').first()).toBeVisible();
 });
@@ -125,7 +132,7 @@ test('confirmed VOD position survives reload and resumes on the same title', asy
     await expect(
         page.getByRole('heading', { name: 'Continue watching' })
     ).toBeVisible();
-    await page.locator('.resume-card').first().click();
+    await cardAction(page, page.locator('.resume-card').first());
     await expect
         .poll(() =>
             page

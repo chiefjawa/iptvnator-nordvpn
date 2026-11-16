@@ -8,6 +8,7 @@ import {
     applySourceDefinition,
     sameSource,
     sourceFromPlaylist,
+    sourceFingerprint,
 } from '@iptvnator/shared/interfaces/source-definition';
 import {
     PlaylistWriteConflict,
@@ -42,7 +43,8 @@ export class SyncedPlaylistStore implements PlaylistDocumentStore {
         private readonly pruneSource?: (
             id: string,
             revision: string | undefined
-        ) => Promise<boolean>
+        ) => Promise<boolean>,
+        private readonly retireSource?: (id: string) => void
     ) {}
 
     exclusive<T>(operation: () => Promise<T>): Promise<T> {
@@ -65,10 +67,11 @@ export class SyncedPlaylistStore implements PlaylistDocumentStore {
     /** Called inside exclusive(), including the inventory refresh. */
     async project(
         source: SourceDefinition,
-        revision: string
+        revision: string,
+        initial?: Playlist
     ): Promise<Playlist> {
         const current = await this.local.dbGetAppPlaylist(source.id);
-        const next = await this.materialize(source, current ?? undefined);
+        const next = await this.materialize(source, current ?? initial);
         next.sourceSyncBase = source;
         next.sourceSyncRevision = revision;
         const merge = (latest: Playlist | null) => {
@@ -86,6 +89,7 @@ export class SyncedPlaylistStore implements PlaylistDocumentStore {
                     return latest;
                 throw new PlaylistWriteConflict(source.id);
             }
+            this.retireChangedSource(latest, source);
             return latest ? retainSourceProjection(next, latest) : next;
         };
         const projected = this.local.dbMutateAppPlaylist
@@ -143,7 +147,13 @@ export class SyncedPlaylistStore implements PlaylistDocumentStore {
                 accepted = response.body as SourceDefinition;
                 revision = response.etag;
                 if (accepted.id !== playlist._id) {
-                    const canonical = await this.project(accepted, revision!);
+                    // A server can reuse another client's ID. Seed a new local
+                    // projection with this import's device-only EPG choices.
+                    const canonical = await this.project(
+                        accepted,
+                        revision!,
+                        applySourceDefinition(accepted, playlist)
+                    );
                     const merge = (latest: Playlist | null) => ({
                         ...(latest ?? canonical),
                         favorites: mergeActivity(
@@ -193,13 +203,19 @@ export class SyncedPlaylistStore implements PlaylistDocumentStore {
                         next,
                         metadataOnly
                     );
-                return latest?.sourceSyncBase &&
+                const projected =
+                    latest?.sourceSyncBase &&
                     baseline &&
                     sameSource(source, baseline) &&
                     (!sameSource(latest.sourceSyncBase, baseline) ||
                         latest.sourceSyncPending !== playlist.sourceSyncPending)
-                    ? retainSourceProjection(latest, next)
-                    : next;
+                        ? retainSourceProjection(latest, next)
+                        : next;
+                this.retireChangedSource(
+                    latest,
+                    sourceFromPlaylist(projected, true)
+                );
+                return projected;
             };
             if (this.local.dbMutateAppPlaylist)
                 next = await this.local.dbMutateAppPlaylist(
@@ -245,6 +261,20 @@ export class SyncedPlaylistStore implements PlaylistDocumentStore {
                     this.pendingSources.delete(row._id);
             return { success: true };
         });
+
+    private retireChangedSource(
+        current: Playlist | null,
+        source: SourceDefinition
+    ): void {
+        if (
+            this.retireSource &&
+            (!current ||
+                sourceFingerprint(
+                    current.sourceSyncBase ?? sourceFromPlaylist(current, true)
+                ) !== sourceFingerprint(source))
+        )
+            this.retireSource(source.id);
+    }
 
     private async pruneObserved(id: string, revision: string | undefined) {
         if (this.pruneSource) return this.pruneSource(id, revision);

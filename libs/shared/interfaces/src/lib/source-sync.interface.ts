@@ -37,10 +37,83 @@ export interface SourceServerConnection {
     instanceId: string;
 }
 
+export interface SavedSourceServerConnection extends SourceServerConnection {
+    hasToken: boolean;
+}
+
+export const TMDB_TRANSFER_CODE_LENGTH = 4;
+export const TMDB_TRANSFER_CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTVWXYZ';
+const tmdbTransferCodePattern = new RegExp(
+    `^[${TMDB_TRANSFER_CODE_ALPHABET}]{${TMDB_TRANSFER_CODE_LENGTH}}$`
+);
+
+export function isTmdbTransferCode(value: unknown): value is string {
+    return typeof value === 'string' && tmdbTransferCodePattern.test(value);
+}
+
+export function isTmdbTransferCapability(value: unknown): value is string {
+    return typeof value === 'string' && /^[A-Za-z0-9_-]{32}$/.test(value);
+}
+
+export function isTmdbTransferKey(value: unknown): value is string {
+    return (
+        typeof value === 'string' &&
+        value.length > 0 &&
+        value.length <= 2048 &&
+        !/[^!-~]/.test(value)
+    );
+}
+
+// The shared trace redactor recognizes credential fields ending in Token.
+export type TmdbTransferRequest =
+    | { action: 'start'; codeFormat?: 'short' }
+    | { action: 'check' | 'status' | 'claim' | 'cancel'; transferToken: string }
+    | { action: 'send'; transferToken: string; apiKey: string };
+
+export interface TmdbTransferSession {
+    senderToken: string;
+    receiverToken: string;
+    expiresInMs: number;
+}
+
 /** Narrow IPC surface; paths and arbitrary headers are never caller-supplied. */
 export interface SourceServerRequest {
     operation:
-        'instance' | 'list' | 'get' | 'create' | 'update' | 'delete' | 'clear';
+        | 'instance'
+        | 'list'
+        | 'get'
+        | 'create'
+        | 'update'
+        | 'delete'
+        | 'clear'
+        | 'activity-context'
+        | 'activity-list'
+        | 'activity-read'
+        | 'activity-apply'
+        | 'history-read'
+        | 'history-apply'
+        | 'favorites-context'
+        | 'favorites-list'
+        | 'favorites-read'
+        | 'favorites-apply'
+        | 'tmdb-transfer';
+    tmdbTransfer?: {
+        connection: SourceServerConnection;
+        request: TmdbTransferRequest;
+    };
+    favorite?: {
+        address: import('./favorites-sync/favorites-sync.contract').FavoriteAddress;
+        operation?: import('./favorites-sync/favorites-sync.contract').FavoriteOperation;
+    };
+    history?: {
+        scope: import('./history-sync/history.contract').HistoryScope;
+        operation: import('./history-sync/history.contract').HistoryOperation;
+    };
+    cursor?: string;
+    activity?: {
+        address: import('./activity-sync/activity-sync.contract').ActivityAddress;
+        operation?: import('./activity-sync/activity-sync.contract').ActivityOperation;
+    };
     id?: string;
     source?: SourceDefinition;
     revision?: string;

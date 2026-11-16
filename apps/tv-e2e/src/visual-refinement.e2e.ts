@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { addSource, backend, nav, start } from './helpers';
+import { addSource, backend, nav, start, cardAction } from './helpers';
 
 test('compact page headers leave room for posters and remove prototype chrome at TV widths', async ({
     page,
@@ -41,7 +41,8 @@ test('compact page headers leave room for posters and remove prototype chrome at
         expect(geometry.headingTop).toBeLessThan(65);
         expect(geometry.countTop).toBeLessThan(110);
         expect(geometry.headingRight).toBeLessThan(geometry.sourceLeft);
-        expect(geometry.posterTop).toBeLessThan(240);
+        // The 1920 canvas uses the TV type scale (72px controls, 28px body).
+        expect(geometry.posterTop).toBeLessThan(width === 1920 ? 300 : 240);
         expect(geometry.ratio).toBeCloseTo(1.5, 1);
         expect(geometry.overflow).toBe(false);
     }
@@ -150,8 +151,8 @@ test('continue watching includes a loaded poster, real progress and the same res
                 .evaluate((e: HTMLProgressElement) => e.value)
         )
         .toBeGreaterThan(7);
-    await expect(resume).toContainText('Resume');
-    await resume.click();
+    await expect(resume).toContainText('Options');
+    await cardAction(page, resume);
     await expect
         .poll(() =>
             page

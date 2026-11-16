@@ -122,9 +122,10 @@ ship complete corresponding source, exact build scripts and patches, notices,
 and a validated transitive license record beside the binary.
 
 The macOS builder verifies every downloaded archive against its pinned
-SHA-256 digest before extraction. FreeType uses its official SourceForge
-distribution as the primary source and the official Savannah distribution as
-a fallback; a failed or mismatched download is discarded before the next
+SHA-256 digest before extraction. CI uses GitHub's asset API for release
+archives hosted there. FreeType has an official Savannah fallback,
+and FriBidi has a MacPorts fallback for GitHub release download failures. A
+failed or mismatched download is discarded before the next
 mirror is attempted. The runtime manifest records the selected URL for a new
 download and the complete ordered candidate list for every archive, so
 fallback use remains visible in the source provenance. Changes to the
@@ -354,6 +355,9 @@ spent. Both constants live in `runtime-probe-contract.cjs`.
 For a locally installed `--dangerous` Snap, CI explicitly installs and
 connects `mesa-core22` and `gnome-3-28-1804`, verifies both connections, and
 then runs the application-level diagnostic under Xvfb.
+Missing providers are installed from the Snap Store with up to three attempts
+and pauses of 15 and 30 seconds after failures. If installation still fails,
+the runtime check fails.
 The Linux packaging matrix alone depends on the runtime-builder job. macOS and
 Windows use an independent matrix, while both matrices share the same anchored
 step list; draft release assembly remains atomic and requires both matrices.

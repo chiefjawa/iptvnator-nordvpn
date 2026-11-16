@@ -40,6 +40,7 @@ export interface Media {
     backdrop?: string;
     description?: string;
     category?: string;
+    categoryName?: string;
     year?: string;
     season?: number;
     episode?: number;
@@ -63,6 +64,11 @@ export interface Media {
             tmdbPersonId?: number;
         }[];
         authorRole: 'Creators' | 'Directors';
+        year?: string;
+        genres?: string[];
+        countries?: string[];
+        durationMinutes?: number;
+        rating?: number;
     };
     raw: Record<string, unknown>;
 }
@@ -116,6 +122,12 @@ export interface Progress {
     seconds: number;
     duration: number;
     updated: number;
+    /** Additive explicit intent; raw positions remain available. */
+    watched?: boolean;
+    reset?: boolean;
+    revision?: number;
+    /** Legacy manual status fence from before playback revisions. */
+    watchedUpdated?: number;
 }
 export interface LibrarySettings {
     url: string;
@@ -132,6 +144,7 @@ export interface UserData {
     backend: string;
     backendToken: string;
     favorites: Media[];
+    favoriteScope: 'all' | 'current';
     history: Progress[];
     positions: Record<string, Progress>;
     catalogSort: CatalogSortPreferences;
@@ -145,6 +158,7 @@ export const initialData = (): UserData => ({
     backend: '',
     backendToken: '',
     favorites: [],
+    favoriteScope: 'all',
     history: [],
     positions: {},
     catalogSort: { movie: 'recent', series: 'recent' },
@@ -197,6 +211,21 @@ export class LatestRequest {
 
 /** Recent history is bounded; unfinished playback positions are retained independently. */
 export function recordProgress(data: UserData, progress: Progress): UserData {
+    const previous =
+        data.positions[progress.item.id] ??
+        data.history.find((p) => p.item.id === progress.item.id);
+    const previousRevision = previous?.revision ?? 0;
+    const revision = progress.revision ?? 0;
+    if (
+        previous &&
+        (previousRevision > revision ||
+            (previousRevision === revision &&
+                (previous.updated > progress.updated ||
+                    (previousRevision === 0 &&
+                        previous.watchedUpdated !== undefined &&
+                        previous.watchedUpdated >= progress.updated))))
+    )
+        return data;
     return {
         ...data,
         history: [
@@ -208,6 +237,7 @@ export function recordProgress(data: UserData, progress: Progress): UserData {
 }
 export function hydrateUserData(saved: Partial<UserData>): UserData {
     const data = { ...initialData(), ...saved };
+    data.favoriteScope = saved.favoriteScope === 'current' ? 'current' : 'all';
     data.catalogSort = {
         movie: normalizeCatalogSort(saved.catalogSort?.movie),
         series: normalizeCatalogSort(saved.catalogSort?.series),
@@ -245,3 +275,9 @@ export * from './series-context';
 export * from './programme-guide';
 
 export * from './grid-guide';
+export * from './detail-metadata';
+export * from './watch-state';
+export * from './series-continuity';
+export * from './recent-channels';
+export * from './confirmed-live-channels';
+export * from './platform';

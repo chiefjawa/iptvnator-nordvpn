@@ -16,9 +16,14 @@ for (const theme of ['Light', 'Dark'] as const) {
         const page = app.mainWindow;
         try {
             await openSettings(page);
-            await page.getByRole('radio', { name: theme, exact: true }).click();
+            await openSettingsSection(page, 'appearance');
+            await page
+                .getByTestId('select-theme')
+                .getByRole('radio', { name: theme, exact: true })
+                .click();
             await saveSettings(page);
             await openSettingsSection(page, 'about');
+            await expect(page.locator('html')).toHaveCSS('user-select', 'none');
             const check = page.getByTestId('app-update-check');
             await expect(check).toHaveCSS('border-top-left-radius', '10px');
             await expect(check).toHaveCSS('border-top-style', 'none');

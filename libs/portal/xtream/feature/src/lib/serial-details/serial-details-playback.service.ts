@@ -1,3 +1,4 @@
+import { observeActivityChanges } from '@iptvnator/services/activity-changes';
 import {
     computed,
     DestroyRef,
@@ -18,7 +19,10 @@ import {
     inlineProgressPosition,
 } from '@iptvnator/portal/shared/util';
 import { XtreamStore } from '@iptvnator/portal/xtream/data-access';
-import { PlaybackPositionRuntimeBridgeService } from '@iptvnator/services';
+import {
+    PlaybackPositionRuntimeBridgeService,
+    SettingsStore,
+} from '@iptvnator/services';
 import {
     ExternalPlayerName,
     ExternalPlayerSession,
@@ -77,6 +81,7 @@ let pageInstances = 0;
 export class SerialDetailsPlaybackService {
     private readonly route = inject(ActivatedRoute);
     private readonly xtreamStore = inject(XtreamStore);
+    private readonly settingsStore = inject(SettingsStore);
     private readonly playbackPositions = inject(PORTAL_PLAYBACK_POSITIONS);
     private readonly playbackPositionBridge = inject(
         PlaybackPositionRuntimeBridgeService
@@ -141,10 +146,21 @@ export class SerialDetailsPlaybackService {
         getSeriesEpisodeMetadata(this.inlineEpisodeState())
     );
     readonly inlineSeriesNavigation = computed(() =>
-        getSeriesPlaybackNavigation(this.inlineEpisodeState())
+        getSeriesPlaybackNavigation(
+            this.inlineEpisodeState(),
+            this.settingsStore.seriesAutoplay?.() !== false
+        )
     );
 
     constructor() {
+        inject(DestroyRef).onDestroy(
+            observeActivityChanges(() => {
+                const id = this.currentPlaylistId();
+                const seriesId = Number(this.selectedItem()?.series_id);
+                if (id && seriesId)
+                    void this.loadSeriesPlaybackPositions(id, seriesId);
+            })
+        );
         // A launch still closing its predecessor must not outlive the page.
         inject(DestroyRef).onDestroy(() => this.bindings.set(null));
         effect(() => {
@@ -251,7 +267,7 @@ export class SerialDetailsPlaybackService {
             Number(episode.id)
         );
         const { playback, episodeState } = buildSerialEpisodePlayback({
-            playlistId: playlist.id,
+            playlist,
             selectedItem,
             episode,
             streamUrl,

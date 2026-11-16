@@ -18,6 +18,14 @@ export class SettingsSnackbarService {
         });
     }
 
+    tmdbKeySaved(): void {
+        this.open(this.translate.instant('SETTINGS.TMDB_TRANSFER.SAVED'));
+    }
+
+    runtimeUpdateFailure(messageKey: string): void {
+        this.open(this.translate.instant(messageKey), { duration: 10000 });
+    }
+
     /**
      * Failures need more reading time than the 2s confirmation toast, and a
      * dismiss action so the message can stay up until it is acknowledged.

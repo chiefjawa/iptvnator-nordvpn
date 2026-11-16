@@ -3,6 +3,8 @@ import {
     EpgViewMode,
     StartupBehavior,
     Theme,
+    THEME_ACCENTS,
+    THEME_PRESETS,
     VideoPlayer,
 } from '@iptvnator/shared/interfaces';
 import {
@@ -16,26 +18,29 @@ import {
     SettingsSection,
     StartupBehaviorOption,
     StartupWindowModeOption,
+    ThemeAccentOption,
     ThemeOption,
     UpdateChannelOption,
 } from './settings.models';
 
 export const SETTINGS_THEME_OPTIONS: ThemeOption[] = [
-    {
-        value: Theme.LightTheme,
-        icon: 'light_mode',
-        labelKey: 'THEMES.LIGHT_THEME',
-    },
-    {
-        value: Theme.DarkTheme,
-        icon: 'dark_mode',
-        labelKey: 'THEMES.DARK_THEME',
-    },
+    ...THEME_PRESETS.map((preset) => ({
+        value: preset.value,
+        presetId: preset.id,
+        labelKey: `THEMES.${preset.value}`,
+    })),
     {
         value: Theme.SystemTheme,
-        icon: 'desktop_windows',
         labelKey: 'THEMES.SYSTEM_THEME',
     },
+];
+
+export const SETTINGS_THEME_ACCENT_OPTIONS: ThemeAccentOption[] = [
+    { value: null, labelKey: 'THEMES.ACCENT_THEME' },
+    ...THEME_ACCENTS.map((accent) => ({
+        value: accent.id,
+        labelKey: `THEMES.ACCENT_${accent.id.toUpperCase()}`,
+    })),
 ];
 
 export const SETTINGS_COVER_SIZE_OPTIONS: CoverSizeOption[] = [

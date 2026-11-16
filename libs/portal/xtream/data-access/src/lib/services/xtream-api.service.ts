@@ -1,6 +1,6 @@
-import { XtreamEpgNormalizer, EpgResponse } from '../xtream-epg-normalizer';
+import type { EpgResponse } from '../xtream-epg-normalizer';
 import { inject, Injectable } from '@angular/core';
-import { DataService } from '@iptvnator/services';
+import { EpgPreferencesService, DataService } from '@iptvnator/services';
 import { createLogger } from '@iptvnator/portal/shared/util/logger';
 import {
     EpgItem,
@@ -45,6 +45,7 @@ export type CategoryType = 'live' | 'vod' | 'series';
 export type StreamType = 'live' | 'movie' | 'series';
 
 export interface XtreamRequestOptions {
+    signal?: AbortSignal;
     requestId?: string;
     sessionId?: string;
     suppressErrorLog?: boolean;
@@ -60,13 +61,17 @@ const XTREAM_ACCOUNT_ACTIONS = [
     'get_profile',
 ] as const;
 
-/**
- * Service for all Xtream Codes API interactions.
- * Extracts API communication logic from the XtreamStore.
- */
+async function loadEpgNormalizer(signal?: AbortSignal) {
+    const { XtreamEpgNormalizer } = await import('../xtream-epg-normalizer');
+    signal?.throwIfAborted();
+    return new XtreamEpgNormalizer();
+}
+
+/** Service for all Xtream Codes API interactions. */
 @Injectable({ providedIn: 'root' })
-export class XtreamApiService extends XtreamEpgNormalizer {
+export class XtreamApiService {
     private readonly dataService = inject(DataService);
+    private readonly epgPreferences = inject(EpgPreferencesService);
     private readonly logger = createLogger('XtreamApiService');
 
     async cancelSession(sessionId: string): Promise<boolean> {
@@ -100,11 +105,7 @@ export class XtreamApiService extends XtreamEpgNormalizer {
             try {
                 const response = await this.sendRequest<XtreamAccountInfo>(
                     credentials,
-                    {
-                        ...(action ? { action } : {}),
-                        username: credentials.username,
-                        password: credentials.password,
-                    },
+                    action ? { action } : {},
                     options
                 );
 
@@ -143,15 +144,14 @@ export class XtreamApiService extends XtreamEpgNormalizer {
 
         const response = await this.sendRequest(
             credentials,
-            {
-                action: actionMap[type],
-                username: credentials.username,
-                password: credentials.password,
-            },
+            { action: actionMap[type] },
             options
         );
 
-        return Array.isArray(response) ? response : [];
+        if (!Array.isArray(response)) {
+            throw new Error('The source did not return a valid catalog.');
+        }
+        return response;
     }
 
     /**
@@ -163,15 +163,14 @@ export class XtreamApiService extends XtreamEpgNormalizer {
     ): Promise<XtreamLiveStream[]> {
         const response = await this.sendRequest(
             credentials,
-            {
-                action: XtreamCodeActions.GetLiveStreams,
-                username: credentials.username,
-                password: credentials.password,
-            },
+            { action: XtreamCodeActions.GetLiveStreams },
             options
         );
 
-        return Array.isArray(response) ? response : [];
+        if (!Array.isArray(response)) {
+            throw new Error('The source did not return a valid catalog.');
+        }
+        return response;
     }
 
     /**
@@ -185,8 +184,6 @@ export class XtreamApiService extends XtreamEpgNormalizer {
             credentials,
             {
                 action: XtreamCodeActions.GetVodStreams,
-                username: credentials.username,
-                password: credentials.password,
                 ...(options?.categoryId !== undefined
                     ? { category_id: options.categoryId }
                     : {}),
@@ -194,7 +191,10 @@ export class XtreamApiService extends XtreamEpgNormalizer {
             options
         );
 
-        return Array.isArray(response) ? response : [];
+        if (!Array.isArray(response)) {
+            throw new Error('The source did not return a valid catalog.');
+        }
+        return response;
     }
 
     async getVodStream(
@@ -224,15 +224,14 @@ export class XtreamApiService extends XtreamEpgNormalizer {
     ): Promise<XtreamSerieItem[]> {
         const response = await this.sendRequest(
             credentials,
-            {
-                action: XtreamCodeActions.GetSeries,
-                username: credentials.username,
-                password: credentials.password,
-            },
+            { action: XtreamCodeActions.GetSeries },
             options
         );
 
-        return Array.isArray(response) ? response : [];
+        if (!Array.isArray(response)) {
+            throw new Error('The source did not return a valid catalog.');
+        }
+        return response;
     }
 
     /**
@@ -265,8 +264,6 @@ export class XtreamApiService extends XtreamEpgNormalizer {
             credentials,
             {
                 action: XtreamCodeActions.GetVodInfo,
-                username: credentials.username,
-                password: credentials.password,
                 vod_id: vodId,
             },
             options
@@ -285,8 +282,6 @@ export class XtreamApiService extends XtreamEpgNormalizer {
             credentials,
             {
                 action: XtreamCodeActions.GetSeriesInfo,
-                username: credentials.username,
-                password: credentials.password,
                 series_id: seriesId,
             },
             options
@@ -307,18 +302,15 @@ export class XtreamApiService extends XtreamEpgNormalizer {
             credentials,
             {
                 action: XtreamCodeActions.GetShortEpg,
-                username: credentials.username,
-                password: credentials.password,
                 stream_id: streamId,
                 limit,
             },
             options
         );
 
-        return this.normalizeShortEpgItems(
-            response,
-            credentials.serverTimezone
-        );
+        return (
+            await loadEpgNormalizer(options?.signal)
+        ).normalizeShortEpgItems(response, credentials.serverTimezone);
     }
 
     /**
@@ -330,43 +322,39 @@ export class XtreamApiService extends XtreamEpgNormalizer {
         streamId: number,
         options?: XtreamRequestOptions
     ): Promise<EpgItem[]> {
-        try {
-            const response: EpgResponse = await this.sendRequest(
+        const fetchSchedule = async (action: XtreamCodeActions) => {
+            const response = await this.sendRequest<EpgResponse | []>(
                 credentials,
-                {
-                    action: XtreamCodeActions.GetSimpleDataTable,
-                    username: credentials.username,
-                    password: credentials.password,
-                    stream_id: streamId,
-                },
+                { action, stream_id: streamId },
                 options
             );
-            const items = this.normalizeFullEpgItems(
-                response,
-                credentials.serverTimezone
-            );
-            if (items.length > 0) {
-                return items;
+            return (
+                await loadEpgNormalizer(options?.signal)
+            ).normalizeFullEpgItems(response, credentials.serverTimezone);
+        };
+        const unsupported = (status?: number) =>
+            status === 404 || status === 405 || status === 501;
+        let primaryError: { status?: number } | null | undefined;
+        const primary = await fetchSchedule(
+            XtreamCodeActions.GetSimpleDataTable
+        ).catch((error: { status?: number } | null) => {
+            primaryError = error;
+        });
+        if (primary?.length) return primary;
+        const legacy = await fetchSchedule(
+            XtreamCodeActions.GetSimpleDateTable
+        ).catch((error: { status?: number } | null) => {
+            options?.signal?.throwIfAborted();
+            if (unsupported(error?.status)) {
+                if (primary || unsupported(primaryError?.status))
+                    return primary ?? [];
+                throw primaryError;
             }
-        } catch {
-            // Fall back to the legacy typo endpoint below.
-        }
-
-        const fallbackResponse: EpgResponse = await this.sendRequest(
-            credentials,
-            {
-                action: XtreamCodeActions.GetSimpleDateTable,
-                username: credentials.username,
-                password: credentials.password,
-                stream_id: streamId,
-            },
-            options
-        );
-
-        return this.normalizeFullEpgItems(
-            fallbackResponse,
-            credentials.serverTimezone
-        );
+            throw error;
+        });
+        if (!legacy.length && !primary && !unsupported(primaryError?.status))
+            throw primaryError;
+        return legacy;
     }
 
     /**
@@ -375,32 +363,56 @@ export class XtreamApiService extends XtreamEpgNormalizer {
     private async sendRequest<TResponse>(
         credentials: XtreamCredentials,
         params: Record<string, string | number>,
-        options?: XtreamRequestOptions
+        {
+            signal,
+            requestId,
+            sessionId,
+            suppressErrorLog,
+        }: XtreamRequestOptions = {}
     ): Promise<TResponse> {
+        signal?.throwIfAborted();
         const normalizedUrl = normalizeXtreamServerUrl(credentials.serverUrl);
-        const serializedParams: Record<string, string> = {};
-        Object.entries(params).forEach(([key, value]) => {
-            const serializedValue = String(value);
-            serializedParams[key] =
-                key === 'username' || key === 'password'
-                    ? serializedValue.trim()
-                    : serializedValue;
-        });
+        const userAgent = credentials.userAgent?.trim();
+        const serializedParams: Record<string, string> = {
+            username: credentials.username.trim(),
+            password: credentials.password.trim(),
+        };
+        for (const [key, value] of Object.entries(params)) {
+            serializedParams[key] = String(value);
+        }
 
-        const response = (await this.dataService.sendIpcEvent(XTREAM_REQUEST, {
-            url: normalizedUrl,
-            ...(credentials.userAgent?.trim()
-                ? { userAgent: credentials.userAgent.trim() }
-                : {}),
-            params: serializedParams,
-            requestId: options?.requestId,
-            sessionId: options?.sessionId,
-            suppressErrorLog: options?.suppressErrorLog,
-        })) as {
+        const request = async () => {
+            signal?.throwIfAborted();
+            return this.dataService.sendIpcEvent(
+                XTREAM_REQUEST,
+                {
+                    url: normalizedUrl,
+                    ...(userAgent && { userAgent }),
+                    params: serializedParams,
+                    requestId,
+                    sessionId,
+                    suppressErrorLog,
+                },
+                ...(signal ? ([signal] as const) : [])
+            );
+        };
+        const isEpg = [
+            XtreamCodeActions.GetShortEpg,
+            XtreamCodeActions.GetSimpleDataTable,
+            XtreamCodeActions.GetSimpleDateTable,
+        ].includes(params['action'] as XtreamCodeActions);
+        const response = (await (isEpg
+            ? this.epgPreferences.run<unknown>(request, {
+                  payload: { epg_listings: [] },
+              })
+            : request())) as {
+            code?: string;
             message?: string;
             payload?: unknown;
+            status?: number;
             type?: string;
         };
+        signal?.throwIfAborted();
 
         // The IPC layer catches errors and returns { type: 'ERROR', message, status }
         // instead of rejecting. Convert that back into a thrown error so callers
@@ -409,7 +421,13 @@ export class XtreamApiService extends XtreamEpgNormalizer {
             response?.type === 'ERROR' ||
             (!response?.payload && response?.message)
         ) {
-            throw new Error(response?.message ?? 'Request failed');
+            throw Object.assign(
+                new Error(response?.message ?? 'Request failed'),
+                {
+                    code: response?.code,
+                    status: response?.status,
+                }
+            );
         }
 
         return response?.payload as TResponse;

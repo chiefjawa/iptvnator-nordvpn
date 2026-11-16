@@ -8,6 +8,7 @@ import {
 import {
     ElectronBridgeCurrentProgramsOptions,
     ElectronBridgeEpgGuideWindow,
+    ElectronBridgeEpgLookupOptions,
     ElectronBridgeTrustOptions,
     EpgChannelMetadata,
     EpgProgram,
@@ -39,9 +40,14 @@ export default class EpgEvents {
      * Bootstrap EPG events
      */
     static bootstrapEpgEvents(): Electron.IpcMain {
+        ipcMain.handle('EPG_SET_ENABLED', (_event, enabled: boolean) =>
+            epgWorkerService.setEnabled(enabled !== false)
+        );
         ipcMain.handle(
             'EPG_RECONCILE_SOURCES',
-            async (_event, args: { urls: string[] }) => {
+            async (_event, args: { urls: string[]; epgEnabled?: boolean }) => {
+                if (typeof args.epgEnabled === 'boolean')
+                    await epgWorkerService.setEnabled(args.epgEnabled);
                 await reconcileEpgSources(args.urls);
                 return { success: true };
             }
@@ -61,7 +67,10 @@ export default class EpgEvents {
             'GET_CHANNEL_PROGRAMS',
             async (
                 _event,
-                args: { channelId: string; options?: { sourceUrls?: string[] } }
+                args: {
+                    channelId: string;
+                    options?: ElectronBridgeEpgLookupOptions;
+                }
             ) => {
                 return this.handleGetChannelPrograms(
                     args.channelId,
@@ -238,7 +247,7 @@ export default class EpgEvents {
         const { canceled, filePaths } = await dialog.showOpenDialog({
             properties: ['openFile'],
             filters: [
-                { name: 'XMLTV', extensions: ['xml', 'gz', 'xmltv'] },
+                { name: 'XMLTV', extensions: ['xml', 'gz', 'xz', 'xmltv'] },
                 { name: 'All Files', extensions: ['*'] },
             ],
         });
@@ -268,7 +277,7 @@ export default class EpgEvents {
 
     private static async handleGetChannelPrograms(
         channelId: string,
-        options?: { sourceUrls?: string[] }
+        options?: ElectronBridgeEpgLookupOptions
     ): Promise<EpgProgram[]> {
         return epgQueryService.getChannelPrograms(channelId, options);
     }

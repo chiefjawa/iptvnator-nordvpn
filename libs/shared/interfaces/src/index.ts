@@ -1,4 +1,7 @@
 export * from './lib/app-update-channel.util';
+export * from './lib/xtream-content-selection';
+export * from './lib/xtream-history-recovery';
+export type { XtreamCategoryVisibility } from './lib/xtream-category-visibility';
 export * from './lib/channel-drm.interface';
 export * from './lib/channel.interface';
 export * from './lib/channel.model';
@@ -70,6 +73,8 @@ export * from './lib/store-keys.enum';
 export * from './lib/stream-format.enum';
 export * from './lib/catalog-title-match.interface';
 export * from './lib/theme.enum';
+export * from './lib/theme-accent';
+export * from './lib/theme-presets';
 export * from './lib/season-marker.util';
 export * from './lib/search-text-fold.util';
 export * from './lib/stalker-account-info-dialog-data.interface';
@@ -99,6 +104,7 @@ export * from './lib/xtream-vod-stream.interface';
 export * from './lib/stalker-item.normalizer';
 export * from './lib/stalker-item-tmdb-hints';
 export * from './lib/stalker-identity.utils';
+export * from './lib/stalker-protocol-hash.loader';
 export * from './lib/stalker-mac-address.util';
 export * from './lib/stalker-request-identity.util';
 export * from './lib/stalker-stb-profile.const';
@@ -122,6 +128,7 @@ export * from './lib/source-health';
 export * from './lib/source-reachability';
 export * from './lib/server-storage.contract';
 export * from './lib/source-sync.interface';
+export * from './lib/hosted-server.interface';
 
 export { sourceIdentity } from './lib/playlist-source-identity.util';
 

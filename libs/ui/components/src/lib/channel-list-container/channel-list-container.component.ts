@@ -17,7 +17,6 @@ import { toObservable, toSignal } from '@angular/core/rxjs-interop';
 import { MatIconModule } from '@angular/material/icon';
 import { ActivatedRoute, NavigationEnd, Router } from '@angular/router';
 import { Store } from '@ngrx/store';
-import { StorageMap } from '@ngx-pwa/local-storage';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { TranslatePipe, TranslateService } from '@ngx-translate/core';
 import { EpgService } from '@iptvnator/epg/data-access';
@@ -42,6 +41,7 @@ import {
     Subscription,
 } from 'rxjs';
 import {
+    EpgPreferencesService,
     ParentalLockService,
     PlaylistsService,
     RuntimeCapabilitiesService,
@@ -56,8 +56,6 @@ import {
     normalizeStalkerDate,
     PlaylistMeta,
     PlaylistRecentlyViewedItem,
-    Settings,
-    STORE_KEY,
 } from '@iptvnator/shared/interfaces';
 import { normalizeEpgUrls } from '@iptvnator/shared/m3u-utils';
 import { AllChannelsViewComponent } from './all-channels-view/all-channels-view.component';
@@ -118,12 +116,12 @@ export class ChannelListContainerComponent implements OnInit, OnDestroy {
     private readonly parentalLock = inject(ParentalLockService);
     private readonly snackBar = inject(MatSnackBar);
     private readonly translate = inject(TranslateService);
-    private readonly storage = inject(StorageMap);
     private readonly store = inject(Store);
     private readonly router = inject(Router);
     private readonly route = inject(ActivatedRoute);
     private readonly playlistContext = inject(PlaylistContextFacade);
     private readonly runtime = inject(RuntimeCapabilitiesService);
+    private readonly epgPreferences = inject(EpgPreferencesService);
     private readonly settingsStore = inject(SettingsStore);
     /** Route-aware playlist ID for recent-item mutations */
     private readonly resolvedPlaylistId =
@@ -147,7 +145,9 @@ export class ChannelListContainerComponent implements OnInit, OnDestroy {
     private epgAvailabilitySubscription?: Subscription;
 
     /** Whether to show EPG data in channel items */
-    private readonly globalEpgUrls = signal<string[]>([]);
+    private readonly globalEpgUrls = computed(() =>
+        normalizeEpgUrls(this.settingsStore.epgUrl())
+    );
     readonly playlistEpgUrls = computed(() => {
         const playlist = this.activePlaylist();
         if (!playlist || playlist.serverUrl || playlist.macAddress) {
@@ -158,12 +158,13 @@ export class ChannelListContainerComponent implements OnInit, OnDestroy {
     });
     readonly shouldShowEpg = computed(
         () =>
+            this.epgPreferences.enabled() &&
             this.runtime.supportsEpg &&
             (this.globalEpgUrls().length > 0 ||
                 this.playlistEpgUrls().length > 0)
     );
     private readonly epgSourceRefreshKey = computed(() => {
-        if (!this.runtime.supportsEpg) {
+        if (!this.epgPreferences.enabled() || !this.runtime.supportsEpg) {
             return '';
         }
 
@@ -476,23 +477,6 @@ export class ChannelListContainerComponent implements OnInit, OnDestroy {
     );
 
     ngOnInit(): void {
-        // Check if EPG should be shown (only in Electron with configured EPG URL)
-        if (this.runtime.supportsEpg) {
-            this.storage
-                .get(STORE_KEY.Settings)
-                .subscribe((settings: unknown) => {
-                    if (
-                        settings &&
-                        Object.keys(settings as Settings).length > 0
-                    ) {
-                        const epgUrl = (settings as Settings).epgUrl;
-                        this.globalEpgUrls.set(normalizeEpgUrls(epgUrl));
-                    }
-                });
-        } else {
-            this.globalEpgUrls.set([]);
-        }
-
         this.epgAvailabilitySubscription = this.epgService.epgAvailable$
             .pipe(
                 filter((available) => available),
@@ -706,6 +690,7 @@ export class ChannelListContainerComponent implements OnInit, OnDestroy {
 
         this.store.dispatch(
             PlaylistActions.updatePlaylistMeta({
+                persist: false,
                 playlist: {
                     _id: playlistId,
                     recentlyViewed: updatedPlaylist?.recentlyViewed ?? [],

@@ -1,16 +1,35 @@
+import { SettingsHostedServerComponent } from './settings-hosted-server.component';
+import { RuntimeCapabilitiesService } from '@iptvnator/services';
+import { SettingsHistorySectionComponent } from './settings-history-section.component';
+import { SettingsFavoritesSectionComponent } from './settings-favorites-section.component';
 import {
     ChangeDetectionStrategy,
     Component,
     inject,
     signal,
+    viewChild,
+    computed,
 } from '@angular/core';
-import { DatePipe } from '@angular/common';
-import { FormsModule } from '@angular/forms';
+import {
+    FormControl,
+    FormsModule,
+    ReactiveFormsModule,
+    Validators,
+} from '@angular/forms';
+import { MatDialog } from '@angular/material/dialog';
+import { dialogSize } from '@iptvnator/ui/components/dialog-size';
+import {
+    SERVER_GUIDES,
+    SettingsServerAboutDialogComponent,
+} from './settings-server-about-dialog.component';
 import { MatButtonModule } from '@angular/material/button';
 import { MatFormFieldModule } from '@angular/material/form-field';
+import { MatIconModule } from '@angular/material/icon';
+import { SettingsSyncStatusComponent } from './settings-sync-status.component';
 import { MatInputModule } from '@angular/material/input';
 import { TranslateModule } from '@ngx-translate/core';
 import { provideFormFieldDefaults } from '@iptvnator/ui/components/form-field-defaults';
+import { SettingsActivitySectionComponent } from './settings-activity-section.component';
 import { createRandomId, type Playlist } from '@iptvnator/shared/interfaces';
 import {
     normalizeSourceServerUrl,
@@ -18,9 +37,10 @@ import {
 } from '@iptvnator/shared/interfaces/source-definition';
 import {
     SourceSyncService,
-    assertSourceInstance,
-    saveBrowserSourceConnection,
+    connectBrowserSourceServer,
     disconnectBrowserSourceConnection,
+    forgetSavedBrowserSourceConnection,
+    readSavedBrowserSourceConnection,
     readLocalSourcesForImport,
     requestSourceServer,
 } from '@iptvnator/services/source-sync';
@@ -30,95 +50,185 @@ import {
     changeDetection: ChangeDetectionStrategy.OnPush,
     providers: [provideFormFieldDefaults()],
     imports: [
-        DatePipe,
+        SettingsActivitySectionComponent,
+        SettingsHostedServerComponent,
+        SettingsFavoritesSectionComponent,
+        SettingsHistorySectionComponent,
+        SettingsSyncStatusComponent,
+        MatIconModule,
         FormsModule,
+        ReactiveFormsModule,
         MatButtonModule,
         MatFormFieldModule,
         MatInputModule,
         TranslateModule,
     ],
     templateUrl: './settings-server-section.component.html',
-    styles: [
-        `
-            :host {
-                display: block;
-            }
-            .server-fields {
-                display: grid;
-                gap: 16px;
-                padding: 20px;
-            }
-            .server-actions {
-                display: flex;
-                gap: 12px;
-                flex-wrap: wrap;
-            }
-            .server-message {
-                color: var(--app-eyebrow-color);
-                overflow-wrap: anywhere;
-            }
-            button,
-            input,
-            mat-checkbox {
-                app-region: no-drag;
-            }
-        `,
-    ],
+    styleUrl: './settings-server-section.component.scss',
 })
 export class SettingsServerSectionComponent {
+    private readonly dialog = inject(MatDialog);
+    readonly guides = SERVER_GUIDES;
     readonly sync = inject(SourceSyncService);
+    readonly supportsHosting = inject(RuntimeCapabilitiesService)
+        .supportsHostedServer;
+
+    readonly hostedServer = viewChild(SettingsHostedServerComponent);
+    readonly localServerUrl = computed(
+        () => this.hostedServer()?.status().localUrl
+    );
+
+    showAbout(): void {
+        this.dialog.open(SettingsServerAboutDialogComponent, dialogSize('md'));
+    }
+
+    async connectHosted(url: string): Promise<void> {
+        if (this.busy()) return;
+        try {
+            const code = await window.electron.hostedServerAccessCode!();
+            this.urlControl.setValue(url);
+            this.token = code;
+            await this.connect();
+        } catch {
+            this.message.set('HOSTED_SERVER.CODE_FAILED');
+        } finally {
+            this.token = '';
+        }
+    }
     readonly busy = signal(false);
+    readonly checking = signal(false);
+    readonly connecting = signal(false);
     readonly message = signal('');
     readonly preview = signal<Playlist[] | null>(null);
-    url = this.sync.connection?.apiUrl ?? '';
+    readonly savedConnection = signal(
+        this.sync.connection || this.sync.connectionReadFailed
+            ? null
+            : window.electron?.sourceSyncConfigure
+              ? (window.electron.sourceSyncSavedConnection?.() ?? null)
+              : readSavedBrowserSourceConnection()
+    );
+    readonly urlControl = new FormControl(
+        this.sync.connection?.apiUrl ?? this.savedConnection()?.apiUrl ?? '',
+        {
+            nonNullable: true,
+            validators: [
+                Validators.required,
+                (control) => {
+                    try {
+                        normalizeSourceServerUrl(control.value.trim());
+                        return null;
+                    } catch {
+                        return { serverUrl: true };
+                    }
+                },
+            ],
+        }
+    );
     token = '';
 
-    async connect(): Promise<void> {
+    isCurrentServer(): boolean {
+        return this.matchesAddress(this.sync.connection?.apiUrl);
+    }
+
+    isSavedServer(): boolean {
+        return this.matchesAddress(this.savedConnection()?.apiUrl);
+    }
+
+    private matchesAddress(apiUrl?: string): boolean {
+        if (!apiUrl) return false;
+        const input = this.urlControl.value.trim().replace(/\/+$/, '');
+        try {
+            return (
+                input === apiUrl || normalizeSourceServerUrl(input) === apiUrl
+            );
+        } catch {
+            return false;
+        }
+    }
+
+    async refresh(): Promise<void> {
+        if (this.busy()) return;
         this.busy.set(true);
+        this.checking.set(true);
         this.message.set('');
         try {
-            const input = this.url.trim().replace(/\/+$/, '');
+            await this.sync.refresh();
+        } catch (error) {
+            this.showError(error);
+        } finally {
+            this.checking.set(false);
+            this.busy.set(false);
+        }
+    }
+
+    async connect(): Promise<void> {
+        if (this.busy()) return;
+        this.message.set('');
+        this.urlControl.markAsTouched();
+        if (this.urlControl.invalid) return;
+        if (this.isCurrentServer() && !this.token) {
+            await this.refresh();
+            return;
+        }
+        this.busy.set(true);
+        this.connecting.set(true);
+        try {
+            const input = this.urlControl.value.trim().replace(/\/+$/, '');
+            const saved = this.isSavedServer() ? this.savedConnection() : null;
+            const reuse = this.token ? null : saved;
             const apiUrl =
-                input === this.sync.connection?.apiUrl
+                input === this.sync.connection?.apiUrl ||
+                input === saved?.apiUrl
                     ? input
                     : normalizeSourceServerUrl(input);
             if (window.electron?.sourceSyncConfigure) {
                 await window.electron.sourceSyncConfigure(
                     apiUrl,
                     this.token,
-                    true
+                    !this.isCurrentServer(),
+                    reuse?.instanceId
                 );
+                this.token = '';
+                if (this.isCurrentServer()) await this.sync.refresh();
             } else {
-                const response = await fetch(`${apiUrl}/v1/instance`, {
-                    redirect: 'error',
-                    signal: AbortSignal.timeout(10000),
-                });
-                const instance: unknown = await response.json();
-                assertSourceInstance(instance);
-                const check = await fetch(`${apiUrl}/v1/sources`, {
-                    headers: this.token
-                        ? { Authorization: `Bearer ${this.token}` }
-                        : {},
-                    redirect: 'error',
-                    signal: AbortSignal.timeout(10000),
-                });
-                if (!check.ok)
-                    throw new Error(
-                        check.status === 401
-                            ? 'SOURCE_SYNC.LOCKED'
-                            : 'SOURCE_SYNC.REQUEST_FAILED'
-                    );
-                saveBrowserSourceConnection(
-                    { apiUrl, instanceId: instance.instanceId! },
-                    this.token
+                await connectBrowserSourceServer(
+                    apiUrl,
+                    this.token,
+                    this.isCurrentServer()
+                        ? this.sync.connection?.instanceId
+                        : undefined,
+                    reuse
                 );
-                location.reload();
+                this.token = '';
+                if (this.isCurrentServer()) await this.sync.refresh();
+                else location.reload();
             }
+        } catch (error) {
+            this.showError(error, 'SOURCE_SYNC.CONNECTION_FAILED');
+        } finally {
+            this.busy.set(false);
+            this.connecting.set(false);
+        }
+    }
+
+    async forgetServer(urlInput: HTMLInputElement): Promise<void> {
+        if (this.busy()) return;
+        this.busy.set(true);
+        this.message.set('');
+        try {
+            if (window.electron?.sourceSyncForget)
+                await window.electron.sourceSyncForget();
+            else forgetSavedBrowserSourceConnection();
+            if (this.isSavedServer()) {
+                this.urlControl.reset('');
+                this.token = '';
+            }
+            this.savedConnection.set(null);
+            urlInput.focus();
         } catch (error) {
             this.showError(error);
         } finally {
             this.busy.set(false);
-            this.token = '';
         }
     }
 
@@ -177,11 +287,21 @@ export class SettingsServerSectionComponent {
         }
     }
 
-    private showError(error: unknown): void {
+    private showError(
+        error: unknown,
+        fallback = 'SOURCE_SYNC.REQUEST_FAILED'
+    ): void {
         const key =
             error instanceof Error
                 ? error.message.match(/SOURCE_SYNC\.[A-Z_]+/)?.[0]
                 : undefined;
-        this.message.set(key ?? 'SOURCE_SYNC.REQUEST_FAILED');
+        this.message.set(
+            fallback === 'SOURCE_SYNC.CONNECTION_FAILED' &&
+                (!key ||
+                    key === 'SOURCE_SYNC.OFFLINE' ||
+                    key === 'SOURCE_SYNC.REQUEST_FAILED')
+                ? fallback
+                : (key ?? fallback)
+        );
     }
 }

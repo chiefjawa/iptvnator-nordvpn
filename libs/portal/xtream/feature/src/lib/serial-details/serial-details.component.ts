@@ -1,4 +1,4 @@
-import { Location } from '@angular/common';
+import type { TmdbMatchContext } from '@iptvnator/services';
 import {
     Component,
     computed,
@@ -113,7 +113,6 @@ import { SerialDetailsDownloadAdapterService } from './serial-details-download-a
     ],
 })
 export class SerialDetailsComponent implements OnDestroy {
-    private readonly location = inject(Location);
     private readonly route = inject(ActivatedRoute);
     private readonly navigation = injectXtreamDetailNavigation('tv');
 
@@ -128,6 +127,21 @@ export class SerialDetailsComponent implements OnDestroy {
         viewChild<SeasonContainerComponent>('seasonContainer');
 
     readonly selectedItem = signal<XtreamSerieDetailsView | null>(null);
+    readonly tmdbMatch = computed<TmdbMatchContext | null>(() => {
+        const item = this.selectedItem();
+        const playlistId = this.currentPlaylistId();
+        if (!item?.series_id || !playlistId) return null;
+        return {
+            identity: {
+                provider: 'xtream',
+                playlistId,
+                mediaType: 'tv',
+                itemId: String(item.series_id),
+            },
+            title: item.info.name,
+            tmdbId: item.info.tmdb_id,
+        };
+    });
     readonly selectedContentType = this.xtreamStore.selectedContentType;
     readonly scrollToCast = scrollToCastCrewRow;
     readonly isFavorite = this.xtreamStore.isFavorite;
@@ -368,7 +382,7 @@ export class SerialDetailsComponent implements OnDestroy {
 
     goBack(): void {
         this.playback.closeInlinePlayer();
-        this.location.back();
+        this.navigation.back();
     }
 
     showCopyNotification(): void {

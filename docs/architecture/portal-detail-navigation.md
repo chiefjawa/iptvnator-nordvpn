@@ -93,6 +93,18 @@ handler as the header Back.
 ## Summary
 
 - Xtream category browsing uses a route-first detail model.
+- Xtream movie/series detail Back uses `WorkspaceBackNavigationService.back()`.
+  With no same-document predecessor (a direct link or renderer reload), it
+  replaces the detail entry with its route's source, content section and
+  category, preserving query parameters. Collection-owned details keep their
+  history return behavior; the active source store does not choose the parent.
+  On the SQLite runtime, the owning typed content row supplies the local
+  category ID: a cross-portal link can carry a provider category ID that
+  differs from, or collides with, a SQLite row ID. A category-qualified typed
+  lookup first verifies the route's local category, preserving it when the
+  same provider ID occurs in several categories. Only a missing membership
+  triggers category recovery. An unavailable item lookup
+  returns to the catalog section root instead of guessing the category.
 - Stalker uses an inline/store-state detail model.
 - Detail pages themselves are two-state (browse ↔ watch) inside
   `PortalDetailShellComponent`; entering/leaving watch is a layout state,
@@ -176,8 +188,11 @@ handler as the header Back.
   affordance returns to the originating collection, plus
   `stalkerReturnByHistory` so that return is a single history step rather than
   a fresh `navigateByUrl()`. The collection's active tab, scope and open inline
-  detail live only in `window.history.state` (`collectionViewState` /
-  `openCollectionDetailItem`); re-navigating starts a stateless entry, which
+  detail live in `window.history.state` (`collectionViewState` /
+  `openCollectionDetailItem`); packaged renderer reload recovery carries only
+  the validated tab/scope into the new document (see
+  [Workspace Shell](./workspace-shell.md)).
+  Re-navigating starts a stateless entry, which
   reopened the collection on its default `live` tab and left the portal page
   one browser Back away. The marker carries the handed-off item's identity
   rather than a bare `true`, because `openStalkerItem` is consumed on arrival
@@ -200,9 +215,9 @@ handler as the header Back.
   the opened detail can no longer report and silently strand the affordance.
   A row identified only by those alternate fields would open with an empty
   identity, so the builder pins the resolved id onto the handoff state item
-  and those rows keep the history return as well. The marker is set only by this
-  builder and only alongside `returnTo`, so the dashboard handoff and every
-  other `stalkerReturnTo` caller keeps its re-navigating behaviour.
+  and those rows keep the history return as well. Collection and Similar
+  handoffs set the marker alongside `returnTo`. The dashboard handoff
+  uses the ordinary `stalkerReturnTo` re-navigation.
 - Live channels in the same collections (the unified live tab of global
   favorites/recent and a portal's own favorites/recent tabs) get the live
   counterpart of that bridge, "open in playlist". Targets come from
@@ -405,6 +420,18 @@ Download handoff behavior:
 
 ## Stalker
 
+A Stalker card in the "Similar" rail uses the same inline catalog handoff
+as "View in portal". Its fragment distinguishes history entries even for
+two titles in the same category. The browser history entry for the original
+catalog or search view holds a one-shot snapshot of the open detail. Back
+restores that title and its catalog or search context after rechecking the
+category lock. Search keeps numeric category IDs as text in the snapshot
+so the lock check can still identify the category. The latest return to a
+catalog or search keeps its loaded pages in memory while the source, list
+selection, and lock version still match. The catalog holds its saved offset
+until the original detail closes, including returns within one category.
+Collection origins use their existing history snapshots.
+
 Stalker details are represented by store state and inline detail rendering on the current screen.
 
 Examples:
@@ -496,3 +523,12 @@ If a future change proposes that Xtream favorites/recent should stay inline:
   detail host
 - verify history/back behavior, playlist preservation, and dashboard handoff
   behavior still make sense
+
+## Collection polling and nested playback
+
+A refresh of the same Xtream favorite/recent item preserves its nested detail
+injector, selected content and inline playback. The loaded source connection,
+provider kind/ID and known content identity define that
+lifetime; display-name and category hints do not reset it. A real source edit or
+identity change still creates a fresh detail context. Pending source loads keep
+the existing request-owner fence before applying any store changes.

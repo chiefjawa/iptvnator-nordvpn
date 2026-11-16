@@ -1,4 +1,5 @@
 import {
+    dbConfig,
     PlaylistUpdateState,
     type Playlist,
 } from '@iptvnator/shared/interfaces';
@@ -8,6 +9,7 @@ import {
     playlistRefreshMatchesSource,
     retainPlaylistRefreshSource,
 } from '@iptvnator/shared/m3u-utils';
+import { mutateIndexedDbPlaylist } from './source-sync/indexeddb-playlist-mutation';
 import { inheritSourceRowSnapshot } from './source-sync/source-row-snapshot-context';
 
 /** Refresh owns parsed content; the current row owns connection and device activity. */
@@ -21,7 +23,11 @@ export function mergeRefreshedPlaylist(
         !playlistRefreshMatchesSource(currentPlaylist, updatedPlaylist)
     )
         return currentPlaylist;
+    const autoImportEpg = currentPlaylist
+        ? currentPlaylist.autoImportEpg
+        : updatedPlaylist.autoImportEpg;
     const epgSourceState = resolvePlaylistEpgSourceState({
+        autoImportEpg,
         detectedEpgUrls:
             updatedPlaylist.detectedEpgUrls ?? currentPlaylist?.detectedEpgUrls,
         enabledEpgUrls: updatedPlaylist.epgUrls ?? currentPlaylist?.epgUrls,
@@ -49,6 +55,7 @@ export function mergeRefreshedPlaylist(
                   position: currentPlaylist.position,
               }
             : {}),
+        ...(autoImportEpg !== undefined ? { autoImportEpg } : {}),
         epgUrls: epgSourceState.epgUrls,
         detectedEpgUrls: epgSourceState.detectedEpgUrls,
         manualEpgUrls: epgSourceState.manualEpgUrls,
@@ -64,4 +71,15 @@ export function mergeRefreshedPlaylist(
           })
         : merged;
     return inheritSourceRowSnapshot(currentPlaylist, accepted);
+}
+
+/** A standalone refresh resolves only after the IndexedDB commit. */
+export function persistIndexedDbPlaylistRefresh(
+    playlistId: string,
+    updatedPlaylist: Playlist
+): Promise<Playlist> {
+    return mutateIndexedDbPlaylist(dbConfig.name, playlistId, (current) => {
+        if (!current) throw new Error('Playlist no longer exists');
+        return mergeRefreshedPlaylist(current, updatedPlaylist, playlistId);
+    });
 }

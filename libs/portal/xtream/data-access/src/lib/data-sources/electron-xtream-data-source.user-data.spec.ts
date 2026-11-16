@@ -264,31 +264,6 @@ describe('ElectronXtreamDataSource (user data delegation)', () => {
             ).not.toHaveBeenCalled();
         });
 
-        it('combines DB restore data with playback positions on clearPlaylistContent', async () => {
-            const hidden = [{ categoryType: 'live', xtreamId: 5 }];
-            const favorites = [{ xtreamId: 202, type: 'movie' }];
-            const recentlyViewed = [{ xtreamId: 101, type: 'live' }];
-            const position = { contentXtreamId: 202 } as never;
-            harness.dbService.deleteXtreamPlaylistContent.mockResolvedValue({
-                hiddenCategories: hidden,
-                favorites,
-                recentlyViewed,
-            });
-            harness.playbackService.getAllPlaybackPositions.mockResolvedValue([
-                position,
-            ]);
-
-            await expect(
-                harness.dataSource.clearPlaylistContent(playlistId)
-            ).resolves.toEqual({
-                hiddenCategories: hidden,
-                favorites,
-                recentlyViewed,
-                playbackPositions: [position],
-                sourcePins: [],
-            });
-        });
-
         it('atomically applies all parked source pins and rejects a failed replacement', async () => {
             // The fresh-import path: a new playlist has no content when the
             // archive is read, so its user state is parked and replayed here.
@@ -438,8 +413,8 @@ describe('ElectronXtreamDataSource (user data delegation)', () => {
             const positionB = { contentXtreamId: 2 } as never;
             const restoreState = {
                 hiddenCategories: [{ categoryType: 'live', xtreamId: 101 }],
-                favorites: [{ xtreamId: 202, type: 'movie' }],
-                recentlyViewed: [{ xtreamId: 101, type: 'live' }],
+                favorites: [{ xtreamId: 202, contentType: 'movie' }],
+                recentlyViewed: [{ xtreamId: 101, contentType: 'live' }],
                 playbackPositions: [positionA, positionB],
             } as never;
             const options = { operationId: 'op-1' };
@@ -474,7 +449,7 @@ describe('ElectronXtreamDataSource (user data delegation)', () => {
             ).toHaveBeenCalledWith(
                 playlistId,
                 [],
-                [{ xtreamId: 101, type: 'live' }],
+                [{ xtreamId: 101, contentType: 'live' }],
                 options
             );
             expect(

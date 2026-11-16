@@ -8,6 +8,7 @@ import {
     XtreamPendingRestoreState,
 } from '@iptvnator/shared/interfaces';
 import { PlaylistBackupService } from './playlist-backup.service';
+import { XtreamDeferredCatalogRestoreService } from './xtream-deferred-catalog-restore.service';
 import { PwaXtreamBackupStateService } from './pwa-xtream-backup-state.service';
 import {
     createBrowserUserDataStorage,
@@ -118,6 +119,8 @@ export function createPlaylistBackupService(
             updateSettings: jest.fn().mockResolvedValue(undefined),
         },
         databaseService: {
+            readAppState: jest.fn().mockResolvedValue({ value: null }),
+            setAppState: jest.fn().mockResolvedValue(true),
             getAllXtreamCategories: jest.fn().mockResolvedValue([]),
             getFavoritesOrThrow: jest.fn().mockResolvedValue([]),
             getRecentItemsOrThrow: jest.fn().mockResolvedValue([]),
@@ -127,7 +130,10 @@ export function createPlaylistBackupService(
             restoreXtreamFavoriteSnapshots: jest
                 .fn()
                 .mockResolvedValue(undefined),
-            restoreXtreamUserData: jest.fn().mockResolvedValue(undefined),
+            restoreXtreamUserData: jest.fn().mockResolvedValue({
+                success: true,
+                resolvedHistory: [],
+            }),
             updateCategoryVisibility: jest.fn().mockResolvedValue(true),
         },
         playbackPositionService: {
@@ -145,6 +151,7 @@ export function createPlaylistBackupService(
             clearForPlaylist: jest.fn().mockResolvedValue(true),
         },
         pendingRestoreService,
+        deferredRestore: new XtreamDeferredCatalogRestoreService(),
         parentalLock: {
             initialize: jest.fn().mockResolvedValue(undefined),
             locksReadable: jest.fn(() => true),
@@ -212,6 +219,11 @@ export function createStatefulBackupCollaborators(
 ) {
     let lastParsedRawM3u: string | null = null;
     const favoriteReceipts = new Set<string>();
+    const stalkerPositions = new Map<string, PlaybackPositionData[]>();
+    const isStalker = (id: string) =>
+        state.playlists.some(
+            (playlist) => playlist._id === id && !!playlist.portalUrl
+        );
 
     return {
         playlistsService: {
@@ -266,6 +278,8 @@ export function createStatefulBackupCollaborators(
             },
         },
         databaseService: {
+            readAppState: async () => ({ value: null }),
+            setAppState: async () => true,
             getAllXtreamCategories: async (
                 playlistId: string,
                 type: 'live' | 'movies' | 'series'
@@ -341,19 +355,30 @@ export function createStatefulBackupCollaborators(
                     type: item.contentType,
                     viewed_at: item.viewedAt,
                 }));
+                return {
+                    success: true,
+                    resolvedHistory: state.xtreamRecent.map((row) => ({
+                        contentType: row.type,
+                        xtreamId: row.xtream_id,
+                    })),
+                };
             },
         },
         playbackPositionService: {
             assertSupportsAtomicReplacement: jest.fn(),
-            getAllPlaybackPositionsOrThrow: async () =>
-                state.playbackPositions.map((item) => ({ ...item })),
+            getAllPlaybackPositionsOrThrow: async (id: string) =>
+                (isStalker(id)
+                    ? (stalkerPositions.get(id) ?? [])
+                    : state.playbackPositions
+                ).map((item) => ({ ...item })),
             replaceAllPlaybackPositions: async (
-                _playlistId: string,
+                playlistId: string,
                 positions: PlaybackPositionData[]
             ) => {
-                state.playbackPositions = positions.map((item) => ({
-                    ...item,
-                }));
+                const saved = positions.map((item) => ({ ...item }));
+                if (isStalker(playlistId))
+                    stalkerPositions.set(playlistId, saved);
+                else state.playbackPositions = saved;
             },
             getAllPlaybackPositions: async () =>
                 state.playbackPositions.map((item) => ({ ...item })),

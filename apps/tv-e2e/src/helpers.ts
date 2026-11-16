@@ -1,10 +1,39 @@
 import { tvOrigins, tvPorts } from '../ports';
-import { expect, Page } from '@playwright/test';
+import { expect, Page, Locator } from '@playwright/test';
 import { resolve } from 'node:path';
 import { workspaceRoot } from '@nx/devkit';
 export const backend = tvOrigins.backend;
 export const xtream = tvOrigins.xtream;
 export const stalker = tvOrigins.stalker;
+
+export async function fillTvField(field: Locator, value: string) {
+    await field.click();
+    await field.fill(value);
+}
+
+export async function cardAction(
+    page: Page,
+    card: Locator,
+    name: string | RegExp = /^(Resume|Watch again|Watch now|Watch live)$/
+) {
+    await card.click();
+    await page
+        .getByRole('dialog')
+        .getByRole('button', { name, exact: true })
+        .click();
+}
+/** Runs a rare viewing action from a detail page's ⋯ or episode options. */
+export async function moreAction(
+    page: Page,
+    name: string,
+    opener = '[data-focus="detail-more"]'
+) {
+    await page.locator(opener).click();
+    await page
+        .getByRole('dialog')
+        .getByRole('button', { name, exact: true })
+        .click();
+}
 export async function start(page: Page) {
     await page.route('**/*', async (route) => {
         const url = route.request().url();
@@ -54,6 +83,7 @@ export async function addSource(
     page: Page,
     type: 'xtream' | 'stalker' | 'm3u',
     options: {
+        name?: string;
         url?: string;
         username?: string;
         password?: string;
@@ -67,30 +97,35 @@ export async function addSource(
     await page
         .getByRole('button', { name: type.toUpperCase(), exact: true })
         .click();
-    await page.getByLabel('IPTVnator backend URL').fill(backend);
-    await page.getByLabel('Name', { exact: true }).fill(`TV ${type}`);
-    await page
-        .getByLabel(type === 'm3u' ? 'Playlist URL' : 'Provider URL')
-        .fill(
-            options.url ??
-                (type === 'stalker'
-                    ? `${stalker}/server/load.php`
-                    : type === 'm3u'
-                      ? `${xtream}/playlist.m3u`
-                      : xtream)
-        );
+    await fillTvField(page.getByLabel('IPTVnator backend URL'), backend);
+    await fillTvField(
+        page.getByLabel('Name', { exact: true }),
+        options.name ?? `TV ${type}`
+    );
+    await fillTvField(
+        page.getByLabel(type === 'm3u' ? 'Playlist URL' : 'Provider URL'),
+        options.url ??
+            (type === 'stalker'
+                ? `${stalker}/server/load.php`
+                : type === 'm3u'
+                  ? `${xtream}/playlist.m3u`
+                  : xtream)
+    );
     if (type !== 'm3u') {
-        await page
-            .getByLabel(/^Username/)
-            .fill(options.username ?? (type === 'xtream' ? 'user1' : ''));
-        await page
-            .getByLabel('Password', { exact: true })
-            .fill(options.password ?? (type === 'xtream' ? 'pass1' : ''));
+        await fillTvField(
+            page.getByLabel(/^Username/),
+            options.username ?? (type === 'xtream' ? 'user1' : '')
+        );
+        await fillTvField(
+            page.getByLabel('Password', { exact: true }),
+            options.password ?? (type === 'xtream' ? 'pass1' : '')
+        );
     }
     if (type === 'stalker')
-        await page
-            .getByLabel('MAC address')
-            .fill(options.mac ?? '00:1a:79:00:00:03');
+        await fillTvField(
+            page.getByLabel('MAC address'),
+            options.mac ?? '00:1a:79:00:00:03'
+        );
     await page.getByRole('button', { name: 'Save and connect' }).click();
     await expect(page.locator('.source-form')).toHaveCount(0);
     await expect(page.locator('.loading')).toBeHidden({ timeout: 25000 });
@@ -115,4 +150,31 @@ export async function nav(page: Page, label: string, openAllChannels = true) {
         await expect(page.locator('.channel-pane-header button')).toBeVisible();
         await expect(page.locator('.channel').first()).toBeFocused();
     }
+}
+
+/** Exercise the TV picker instead of bypassing it with selectOption. */
+export async function chooseTv(
+    page: Page,
+    label: string,
+    value: string | { label: string }
+) {
+    await page.getByRole('combobox', { name: label, exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: label, exact: true });
+    if (typeof value === 'object') {
+        await dialog
+            .getByRole('option', { name: value.label, exact: true })
+            .click();
+    } else {
+        const options = dialog.getByRole('option');
+        let matched = false;
+        for (const option of await options.all()) {
+            if ((await option.getAttribute('data-value')) === value) {
+                await option.click();
+                matched = true;
+                break;
+            }
+        }
+        expect(matched, `TV option exists in ${label}`).toBe(true);
+    }
+    await expect(dialog).toBeHidden();
 }

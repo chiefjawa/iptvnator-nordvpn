@@ -24,6 +24,8 @@ import {
     MetaChipComponent,
     PortalDetailShellComponent,
     SimilarRailComponent,
+    DETAIL_SIMILAR_SOURCE,
+    mergeSimilarRailItems,
     TrailerDialogService,
     VodMoreMenuComponent,
     scrollToCastCrewRow,
@@ -36,7 +38,10 @@ import {
     ResolvedPortalPlayback,
     TmdbEnrichedCastMember,
     VodDetailsItem,
+    getVodId,
     getVodNumericId,
+    getXtreamVodInfo,
+    isStalkerSeriesItem,
     normalizeVodDetails,
     youtubeEmbedUrl,
 } from '@iptvnator/shared/interfaces';
@@ -48,6 +53,7 @@ import {
     SettingsStore,
     TmdbEnrichmentService,
     injectTranslationTick,
+    type TmdbMatchContext,
 } from '@iptvnator/services';
 import { VOD_DETAILS_MENU_ACTION } from './vod-details-presentation';
 import { createVodDetailsHeroState } from './vod-details-hero.state';
@@ -215,6 +221,42 @@ export class VodDetailsComponent {
 
     /** Normalized metadata for display */
     readonly normalizedMeta = computed(() => normalizeVodDetails(this.item()));
+    readonly tmdbMatch = computed<TmdbMatchContext | null>(() => {
+        const item = this.item();
+        const itemId = String(getVodId(item) ?? '').trim();
+        if (
+            !item.playlistId ||
+            !itemId ||
+            (item.type !== 'stalker' && item.type !== 'xtream')
+        )
+            return null;
+        return {
+            identity: {
+                provider: item.type,
+                ...(item.type === 'stalker' ? { catalog: 'vod' as const } : {}),
+                playlistId: item.playlistId,
+                mediaType:
+                    item.type === 'stalker' &&
+                    (item.data.info.tmdb_media_type === 'tv' ||
+                        isStalkerSeriesItem(
+                            item.data as typeof item.data & {
+                                is_series?: unknown;
+                                series?: unknown;
+                            }
+                        ))
+                        ? 'tv'
+                        : 'movie',
+                itemId: String(itemId),
+            },
+            title: this.normalizedMeta().title,
+            tmdbId:
+                Number(
+                    item.type === 'stalker'
+                        ? item.data.info.tmdb_id
+                        : getXtreamVodInfo(item.data)?.tmdb_id
+                ) || null,
+        };
+    });
 
     readonly trailerEmbedUrl = computed(() =>
         youtubeEmbedUrl(this.normalizedMeta().youtubeTrailer)
@@ -333,10 +375,23 @@ export class VodDetailsComponent {
 
     readonly scrollToCast = scrollToCastCrewRow;
 
+    private readonly localSimilar = inject(DETAIL_SIMILAR_SOURCE, {
+        optional: true,
+    });
+    readonly similarRailItems = computed(() =>
+        mergeSimilarRailItems(
+            this.localSimilar?.items() ?? [],
+            this.hero.similarRailItems()
+        )
+    );
+
     openSimilarRailItem(item: SimilarRailItem): void {
         const match = findSimilarByRailKey(this.similarInPortals(), item.key);
         if (match) {
+            this.localSimilar?.rememberOrigin();
             this.openSimilarInPortals(match);
+        } else {
+            this.localSimilar?.open(item);
         }
     }
 

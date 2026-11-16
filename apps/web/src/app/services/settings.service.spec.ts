@@ -1,4 +1,3 @@
-import { HttpClientTestingModule } from '@angular/common/http/testing';
 import { inject, TestBed } from '@angular/core/testing';
 import { StorageMap } from '@ngx-pwa/local-storage';
 import { of } from 'rxjs';
@@ -40,7 +39,6 @@ describe('Service: Settings', () => {
 
         TestBed.configureTestingModule({
             providers: [SettingsService],
-            imports: [HttpClientTestingModule],
         });
     });
 
@@ -82,6 +80,7 @@ describe('Service: Settings', () => {
         let spyOnRemove: jest.SpyInstance<void, [...tokens: string[]]>;
         beforeEach(() => {
             document.body.classList.remove('dark-theme', 'light-theme');
+            delete document.body.dataset['appTheme'];
             spyOnAdd = jest.spyOn(document.body.classList, 'add');
             spyOnRemove = jest.spyOn(document.body.classList, 'remove');
         });
@@ -89,6 +88,45 @@ describe('Service: Settings', () => {
         afterEach(() => {
             jest.clearAllMocks();
             document.body.classList.remove('dark-theme', 'light-theme');
+            delete document.body.dataset['appTheme'];
+        });
+
+        it.each([
+            ['CREAM_THEME', 'cream', 'light-theme', 'dark-theme'],
+            ['MOCHA_THEME', 'mocha', 'dark-theme', 'light-theme'],
+            ['NIGHT_OWL_THEME', 'night-owl', 'dark-theme', 'light-theme'],
+            ['BLACK_OLED_THEME', 'black-oled', 'dark-theme', 'light-theme'],
+            [Theme.LightTheme, 'light', 'light-theme', 'dark-theme'],
+            [Theme.DarkTheme, 'dark', 'dark-theme', 'light-theme'],
+        ])(
+            'applies preset %s with its compatibility class',
+            (theme, id, active, inactive) => {
+                const service = TestBed.inject(SettingsService);
+                service.changeTheme(theme as Theme);
+                expect(document.body.dataset['appTheme']).toBe(id);
+                expect(document.body.classList.contains(active)).toBe(true);
+                expect(document.body.classList.contains(inactive)).toBe(false);
+            }
+        );
+
+        it('normalizes an unknown theme to the system preference', () => {
+            const service = TestBed.inject(SettingsService);
+            service.changeTheme('UNKNOWN_THEME' as Theme);
+            expect(document.body.dataset['appTheme']).toBe('dark');
+            expect(systemThemeListeners).toHaveLength(1);
+        });
+
+        it.each([
+            ['CREAM_THEME', 'cream'],
+            ['MOCHA_THEME', 'mocha'],
+            ['NIGHT_OWL_THEME', 'night-owl'],
+            ['BLACK_OLED_THEME', 'black-oled'],
+        ])('stops following system changes after selecting %s', (theme, id) => {
+            const service = TestBed.inject(SettingsService);
+            service.changeTheme(Theme.SystemTheme);
+            service.changeTheme(theme as Theme);
+            expect(systemThemeListeners).toHaveLength(0);
+            expect(document.body.dataset['appTheme']).toBe(id);
         });
 
         it('should switch to the dark theme', inject(
@@ -128,6 +166,8 @@ describe('Service: Settings', () => {
 
                 expect(spyOnAdd).toHaveBeenCalledWith('dark-theme');
 
+                expect(document.body.dataset['appTheme']).toBe('dark');
+
                 systemThemeListeners[0]?.({
                     matches: false,
                 } as MediaQueryListEvent);
@@ -137,7 +177,164 @@ describe('Service: Settings', () => {
                 expect(document.body.classList.contains('light-theme')).toBe(
                     true
                 );
+                expect(document.body.dataset['appTheme']).toBe('light');
             }
         ));
+    });
+    describe('system theme pair', () => {
+        afterEach(() => {
+            document.body.classList.remove('dark-theme', 'light-theme');
+            delete document.body.dataset['appTheme'];
+        });
+
+        it('shows the saved dark preset while the device is dark', () => {
+            const service = TestBed.inject(SettingsService);
+            service.changeSystemThemes(Theme.CreamTheme, Theme.MochaTheme);
+            service.changeTheme(Theme.SystemTheme);
+
+            expect(document.body.dataset['appTheme']).toBe('mocha');
+            systemThemeListeners[0]?.({ matches: false } as MediaQueryListEvent);
+            expect(document.body.dataset['appTheme']).toBe('cream');
+            expect(document.body.classList.contains('light-theme')).toBe(true);
+        });
+
+        it('applies a changed pair at once while System is active', () => {
+            const service = TestBed.inject(SettingsService);
+            service.changeTheme(Theme.SystemTheme);
+            expect(document.body.dataset['appTheme']).toBe('dark');
+
+            service.changeSystemThemes(Theme.LightTheme, Theme.NightOwlTheme);
+            expect(document.body.dataset['appTheme']).toBe('night-owl');
+        });
+
+        it('leaves an explicit theme alone when the pair changes', () => {
+            const service = TestBed.inject(SettingsService);
+            service.changeTheme(Theme.CreamTheme);
+            service.changeSystemThemes(Theme.LightTheme, Theme.BlackOledTheme);
+
+            expect(document.body.dataset['appTheme']).toBe('cream');
+        });
+
+        it('falls back to Light and Dark for presets of the wrong mode', () => {
+            const service = TestBed.inject(SettingsService);
+            service.changeSystemThemes(Theme.MochaTheme, Theme.CreamTheme);
+            service.changeTheme(Theme.SystemTheme);
+
+            expect(document.body.dataset['appTheme']).toBe('dark');
+        });
+    });
+
+    describe('theme accent', () => {
+        // jsdom loads no stylesheet; inline tokens stand in for the palette.
+        const DARK = [
+            '#1e2330',
+            '#0d0f12',
+            '#111318',
+            '#161a22',
+            '#252b3a',
+            '#d8dce8',
+        ];
+        const LIGHT = [
+            '#ffffff',
+            '#eef0f3',
+            '#eef0f3',
+            '#f5f6f8',
+            '#f0f2f5',
+            '#1a1d23',
+        ];
+        const SURFACE_TOKENS = [
+            '--app-widget-bg',
+            '--app-shell-bg',
+            '--app-rail-bg',
+            '--app-content-bg',
+            '--app-card-hover-bg',
+            '--app-heading-color',
+        ];
+        const setSurfaces = (colors: string[]) =>
+            SURFACE_TOKENS.forEach((token, i) =>
+                document.body.style.setProperty(token, colors[i])
+            );
+        const token = (name: string) =>
+            document.body.style.getPropertyValue(name);
+
+        afterEach(() => {
+            document.body.removeAttribute('style');
+            document.body.classList.remove('dark-theme', 'light-theme');
+            delete document.body.dataset['appTheme'];
+            delete document.body.dataset['themeAccent'];
+        });
+
+        it('overrides the selection and primary roles on body', async () => {
+            const service = TestBed.inject(SettingsService);
+            setSurfaces(DARK);
+            service.changeTheme(Theme.DarkTheme);
+            await service.changeThemeAccent('magenta');
+
+            expect(document.body.dataset['themeAccent']).toBe('magenta');
+            expect(token('--app-selection-color')).toMatch(/^#[0-9a-f]{6}$/);
+            expect(token('--mat-sys-primary')).toBe(
+                token('--app-selection-text-color')
+            );
+            expect(token('--app-list-selected-fg')).toBe(
+                token('--app-selection-text-color')
+            );
+        });
+
+        it('restores the theme colour when the accent is cleared', async () => {
+            const service = TestBed.inject(SettingsService);
+            setSurfaces(DARK);
+            await service.changeThemeAccent('teal');
+            await service.changeThemeAccent(null);
+
+            expect(document.body.dataset['themeAccent']).toBeUndefined();
+            expect(token('--app-selection-color')).toBe('');
+            expect(token('--mat-sys-primary')).toBe('');
+        });
+
+        it('ignores an unknown saved accent', async () => {
+            const service = TestBed.inject(SettingsService);
+            setSurfaces(DARK);
+            await service.changeThemeAccent('chartreuse');
+
+            expect(document.body.dataset['themeAccent']).toBeUndefined();
+            expect(token('--app-selection-color')).toBe('');
+        });
+
+        it('keeps the preset color if the accent is cleared while loading', async () => {
+            const service = TestBed.inject(SettingsService);
+            setSurfaces(DARK);
+            const preview = service.changeThemeAccent('teal');
+            await service.changeThemeAccent(null);
+            await preview;
+
+            expect(document.body.dataset['themeAccent']).toBeUndefined();
+            expect(token('--app-selection-color')).toBe('');
+        });
+
+        it('re-derives the accent for the next theme', async () => {
+            const service = TestBed.inject(SettingsService);
+            setSurfaces(LIGHT);
+            service.changeTheme(Theme.LightTheme);
+            await service.changeThemeAccent('amber');
+            const onLight = token('--app-selection-color');
+
+            setSurfaces(DARK);
+            service.changeTheme(Theme.DarkTheme);
+            const onDark = token('--app-selection-color');
+            // Darkened for the white widget, lightened for the dark one.
+            expect(onLight).not.toBe(onDark);
+            expect(parseInt(onDark.slice(1, 3), 16)).toBeGreaterThan(
+                parseInt(onLight.slice(1, 3), 16)
+            );
+            expect(service.appliedThemePresetId()).toBe('dark');
+        });
+
+        it('leaves the theme untouched while its styles are missing', async () => {
+            const service = TestBed.inject(SettingsService);
+            await service.changeThemeAccent('blue');
+
+            expect(document.body.dataset['themeAccent']).toBeUndefined();
+            expect(token('--app-selection-color')).toBe('');
+        });
     });
 });

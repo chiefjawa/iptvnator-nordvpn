@@ -1,4 +1,5 @@
 import { installTvFixtures } from './tv-fixtures.js';
+import { installTmdbFixtures } from './tmdb-fixtures.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import cors from 'cors';
@@ -9,7 +10,7 @@ import express, {
 } from 'express';
 import { installLiveFormatFixture } from './live-format-fixture.js';
 import { resolveXtreamMockPortString } from './mock-port.js';
-import { resetAll } from './data-store.js';
+import { resetAccount, resetAll } from './data-store.js';
 import {
     resetDroppingEpisodes,
     streamDroppingEpisode,
@@ -85,7 +86,10 @@ export function createXtreamMockApp(
         installPerformanceControlRoutes(app, controller, options.control.token);
     }
     app.use(cors());
-    if (!controlEnabled) installTvFixtures(app);
+    if (!controlEnabled) {
+        installTvFixtures(app);
+        installTmdbFixtures(app);
+    }
     app.use(express.json());
 
     app.get('/health', (_request, response) => {
@@ -95,15 +99,30 @@ export function createXtreamMockApp(
             port: options.port,
         });
     });
-    app.post('/reset', (_request, response) => {
+    app.post('/reset', (request, response) => {
         if (controlEnabled) {
             response
                 .status(410)
                 .json({ error: 'use-performance-control-reset' });
             return;
         }
-        resetAll();
-        resetDroppingEpisodes();
+        const { username, password } = request.query;
+        if (username !== undefined || password !== undefined) {
+            if (
+                typeof username !== 'string' ||
+                !username ||
+                typeof password !== 'string' ||
+                !password
+            ) {
+                response.status(400).json({ error: 'invalid-reset-identity' });
+                return;
+            }
+            resetAccount(username, password);
+            resetDroppingEpisodes(username, password);
+        } else {
+            resetAll();
+            resetDroppingEpisodes();
+        }
         response.json({ status: 'reset' });
     });
     app.get('/playlist.m3u', (_request, response) => {

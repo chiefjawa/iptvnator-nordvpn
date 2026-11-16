@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import { DataService } from '@iptvnator/services';
+import { DataService, EpgPreferencesService } from '@iptvnator/services';
 import { XTREAM_REQUEST } from '@iptvnator/shared/interfaces';
 import { XtreamApiService, XtreamCredentials } from './xtream-api.service';
 
@@ -28,6 +28,91 @@ describe('XtreamApiService', () => {
         });
 
         service = TestBed.inject(XtreamApiService);
+    });
+
+    it('passes browser cancellation outside the serializable request payload', async () => {
+        const signal = new AbortController().signal;
+        dataService.sendIpcEvent.mockResolvedValue({ payload: [] });
+        await service.getCategories(credentials, 'live', { signal });
+        expect(dataService.sendIpcEvent).toHaveBeenCalledWith(
+            XTREAM_REQUEST,
+            expect.not.objectContaining({ signal }),
+            signal
+        );
+        expect(dataService.sendIpcEvent.mock.calls[0][1]).not.toHaveProperty(
+            'signal'
+        );
+    });
+
+    it('does not dispatch an EPG request cancelled while preferences load', async () => {
+        const preferences = TestBed.inject(EpgPreferencesService);
+        preferences.beginLoad();
+        const controller = new AbortController();
+        dataService.sendIpcEvent.mockResolvedValue({ payload: [] });
+        const result = service.getFullEpg(credentials, 101, {
+            sessionId: 'synthetic-guide',
+            signal: controller.signal,
+        });
+        controller.abort();
+        await preferences.apply(true);
+        await expect(result).rejects.toMatchObject({ name: 'AbortError' });
+        expect(dataService.sendIpcEvent).not.toHaveBeenCalled();
+    });
+
+    describe.each(['live', 'vod', 'series'] as const)(
+        '%s catalog validation',
+        (type) => {
+            it.each([
+                { user_info: { auth: 0 } },
+                { error: 'Unavailable' },
+                null,
+                '<html>Failure</html>',
+            ])('rejects a non-array catalog response: %j', async (payload) => {
+                dataService.sendIpcEvent.mockResolvedValue({ payload });
+                await expect(
+                    service.getCategories(credentials, type)
+                ).rejects.toThrow('catalog');
+                await expect(
+                    service.getStreams(
+                        credentials,
+                        type === 'vod' ? 'movie' : type
+                    )
+                ).rejects.toThrow('catalog');
+            });
+
+            it('accepts a genuine empty catalog', async () => {
+                dataService.sendIpcEvent.mockResolvedValue({ payload: [] });
+                await expect(
+                    service.getCategories(credentials, type)
+                ).resolves.toEqual([]);
+                await expect(
+                    service.getStreams(
+                        credentials,
+                        type === 'vod' ? 'movie' : type
+                    )
+                ).resolves.toEqual([]);
+            });
+        }
+    );
+
+    it('keeps the server error code when a catalog failure has no message', async () => {
+        const code = 'PROVIDER_RESPONSE_TOO_LARGE';
+        dataService.sendIpcEvent.mockResolvedValue({ type: 'ERROR', code });
+
+        await expect(service.getVodStreams(credentials)).rejects.toMatchObject({
+            code,
+            message: 'Request failed',
+        });
+    });
+
+    it('skips every EPG endpoint while disabled but keeps catalog requests working', async () => {
+        await TestBed.inject(EpgPreferencesService).apply(false);
+        expect(await service.getShortEpg(credentials, 101)).toEqual([]);
+        expect(await service.getFullEpg(credentials, 101)).toEqual([]);
+        expect(dataService.sendIpcEvent).not.toHaveBeenCalled();
+        dataService.sendIpcEvent.mockResolvedValue({ payload: [] });
+        await service.getCategories(credentials, 'live');
+        expect(dataService.sendIpcEvent).toHaveBeenCalledTimes(1);
     });
 
     it('forwards the connection User-Agent on account variants and catalog requests', async () => {
@@ -181,7 +266,129 @@ describe('XtreamApiService', () => {
         );
     });
 
-    it('falls back to the legacy full-epg action and normalizes the response', async () => {
+    it('keeps an empty full guide when the legacy action is unsupported', async () => {
+        dataService.sendIpcEvent
+            .mockResolvedValueOnce({ payload: { epg_listings: [] } })
+            .mockResolvedValueOnce({
+                type: 'ERROR',
+                status: 404,
+                message: 'synthetic unsupported action',
+            });
+        await expect(service.getFullEpg(credentials, 101)).resolves.toEqual([]);
+        expect(dataService.sendIpcEvent).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps a transient legacy action failure distinct from an empty guide', async () => {
+        dataService.sendIpcEvent
+            .mockResolvedValueOnce({ payload: { epg_listings: [] } })
+            .mockResolvedValueOnce({
+                type: 'ERROR',
+                status: 503,
+                message: 'synthetic provider outage',
+            });
+        await expect(
+            service.getFullEpg(credentials, 101)
+        ).rejects.toMatchObject({
+            status: 503,
+        });
+    });
+
+    it.each([501, 503])(
+        'distinguishes two unsupported full-guide actions from an outage (%s)',
+        async (primaryStatus) => {
+            dataService.sendIpcEvent
+                .mockResolvedValueOnce({
+                    type: 'ERROR',
+                    status: primaryStatus,
+                    message: 'Synthetic primary response',
+                })
+                .mockResolvedValueOnce({
+                    type: 'ERROR',
+                    status: 501,
+                    message: 'Synthetic legacy response',
+                });
+            const result = service.getFullEpg(credentials, 101);
+            if (primaryStatus === 501)
+                await expect(result).resolves.toEqual([]);
+            else
+                await expect(result).rejects.toMatchObject({
+                    status: primaryStatus,
+                });
+        }
+    );
+
+    it.each([404, 503])(
+        'keeps an empty legacy response only when the primary failure is unsupported (%s)',
+        async (status) => {
+            dataService.sendIpcEvent
+                .mockResolvedValueOnce({
+                    type: 'ERROR',
+                    status,
+                    message: 'synthetic provider failure',
+                })
+                .mockResolvedValueOnce({ payload: { epg_listings: [] } });
+            const result = service.getFullEpg(credentials, 101);
+            if (status === 404) await expect(result).resolves.toEqual([]);
+            else await expect(result).rejects.toMatchObject({ status });
+        }
+    );
+
+    it('reports a full guide failure when neither action responds', async () => {
+        const error = new Error('synthetic provider outage');
+        dataService.sendIpcEvent.mockRejectedValue(error);
+        await expect(service.getFullEpg(credentials, 101)).rejects.toThrow(
+            error.message
+        );
+    });
+
+    it('does not turn an invalid primary payload and a failed fallback into an empty guide', async () => {
+        dataService.sendIpcEvent
+            .mockResolvedValueOnce({
+                payload: { error: 'synthetic unavailable' },
+            })
+            .mockRejectedValueOnce(new Error('synthetic fallback failure'));
+        await expect(service.getFullEpg(credentials, 101)).rejects.toThrow(
+            'synthetic fallback failure'
+        );
+    });
+
+    it.each([
+        { error: 'synthetic unavailable' },
+        { epg_listings: null, error: 'synthetic unavailable' },
+        { epg_listings: [], error: 'synthetic unavailable' },
+        { epg_listings: 'synthetic invalid listing' },
+        { epg_listings: [{ id: 'synthetic incomplete listing' }] },
+        { epg_listings: [{ start: 'invalid', stop: 'invalid' }] },
+        { epg_listings: [{ start_timestamp: '200', stop_timestamp: '100' }] },
+    ])(
+        'rejects a malformed legacy full schedule after the primary fails: %j',
+        async (payload) => {
+            dataService.sendIpcEvent
+                .mockRejectedValueOnce(new Error('synthetic primary failure'))
+                .mockResolvedValueOnce({ payload });
+            await expect(service.getFullEpg(credentials, 101)).rejects.toThrow(
+                'Invalid full EPG listing'
+            );
+        }
+    );
+
+    it.each([{ payload: [] }, { payload: { epg_listings: null } }])(
+        'accepts an explicit empty legacy schedule when the primary action is unsupported: %j',
+        async (response) => {
+            dataService.sendIpcEvent
+                .mockResolvedValueOnce({
+                    type: 'ERROR',
+                    status: 404,
+                    message: 'synthetic unsupported action',
+                })
+                .mockResolvedValueOnce(response);
+            await expect(service.getFullEpg(credentials, 101)).resolves.toEqual(
+                []
+            );
+        }
+    );
+
+    it('falls back to the legacy full-epg action when the primary times are invalid', async () => {
         dataService.sendIpcEvent.mockImplementation(
             async (_type: string, payload: unknown) => {
                 const action = (
@@ -191,7 +398,13 @@ describe('XtreamApiService', () => {
                 ).params.action;
 
                 if (action === 'get_simple_data_table') {
-                    return { payload: { epg_listings: [] } };
+                    return {
+                        payload: {
+                            epg_listings: [
+                                { start: 'invalid', stop: 'invalid' },
+                            ],
+                        },
+                    };
                 }
 
                 return {
@@ -355,7 +568,6 @@ describe('XtreamApiService', () => {
         // must not enter the conversion.
         const listing = {
             id: 'current',
-            epg_id: 'channel-101.mock',
             title: Buffer.from('Current Show').toString('base64'),
             description: '',
             start: '2026-09-06 22:30:00',
@@ -378,12 +590,14 @@ describe('XtreamApiService', () => {
 
         expect(shortItems[0]).toEqual(
             expect.objectContaining({
+                epg_id: '',
                 start: '2026-09-06T19:30:00.000Z',
                 stop: '2026-09-06T20:00:00.000Z',
             })
         );
         expect(fullItems[0]).toEqual(
             expect.objectContaining({
+                epg_id: 'channel-101.mock',
                 start: '2026-09-06T19:30:00.000Z',
                 stop: '2026-09-06T20:00:00.000Z',
             })

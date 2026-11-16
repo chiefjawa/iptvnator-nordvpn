@@ -25,6 +25,7 @@ import { VodDetailsComponent } from '@iptvnator/ui/playback';
 import { EMPTY, of } from 'rxjs';
 import { buildStalkerSelectedVodItem } from '@iptvnator/portal/stalker/data-access';
 import { StalkerCatalogFacadeService } from '../stalker-catalog-facade.service';
+import { StalkerDetailSimilar } from '../stalker-detail-similar';
 import { StalkerSeriesViewComponent } from '../stalker-series-view/stalker-series-view.component';
 import { StalkerCatalogDetailComponent } from './stalker-catalog-detail.component';
 import { createPlaybackSessionKey } from '@iptvnator/playback/util';
@@ -94,9 +95,15 @@ describe('StalkerCatalogDetailComponent provider presentation', () => {
     const catalogPlaylist = signal({ id: 'stalker-1' });
     const snackBar = { open: jest.fn() };
     const refreshPositions = jest.fn().mockResolvedValue(undefined);
+    const applyPlaybackPosition = jest.fn();
     const getPlaybackPosition = jest.fn().mockResolvedValue(null);
     const savePlaybackPositionOrThrow = jest.fn().mockResolvedValue(undefined);
-    const routerMock = { navigateByUrl: jest.fn() };
+    const routerMock = {
+        navigateByUrl: jest.fn(),
+        lastSuccessfulNavigation: jest.fn((): { id: number } | null => null),
+    };
+    const saveCatalogSimilarReturn = jest.fn(() => false);
+    let bindSimilar: jest.SpyInstance;
     const locationMock = { back: jest.fn() };
     const originalHistoryState = window.history.state;
     const selectedItem = signal<unknown>({
@@ -117,9 +124,13 @@ describe('StalkerCatalogDetailComponent provider presentation', () => {
         catalogPlaylist.set({ id: 'stalker-1' });
         snackBar.open.mockReset();
         refreshPositions.mockClear();
+        applyPlaybackPosition.mockClear();
         getPlaybackPosition.mockReset().mockResolvedValue(null);
         savePlaybackPositionOrThrow.mockClear().mockResolvedValue(undefined);
         routerMock.navigateByUrl.mockReset();
+        routerMock.lastSuccessfulNavigation.mockReset().mockReturnValue(null);
+        saveCatalogSimilarReturn.mockReset().mockReturnValue(false);
+        bindSimilar = jest.spyOn(StalkerDetailSimilar.prototype, 'bind');
         locationMock.back.mockReset();
 
         await TestBed.configureTestingModule({
@@ -134,6 +145,8 @@ describe('StalkerCatalogDetailComponent provider presentation', () => {
                         clearSelectedItem: jest.fn(),
                         resolveVodPlayback,
                         refreshPositions,
+                        applyPlaybackPosition,
+                        saveCatalogSimilarReturn,
                     },
                 },
                 {
@@ -195,7 +208,29 @@ describe('StalkerCatalogDetailComponent provider presentation', () => {
 
     afterEach(() => {
         fixture.destroy();
+        bindSimilar.mockRestore();
         window.history.replaceState(originalHistoryState, '');
+    });
+
+    it('adds the catalog return id only when there is a snapshot to restore', () => {
+        const [bindings] = bindSimilar.mock.calls[0] as Parameters<
+            StalkerDetailSimilar['bind']
+        >;
+        const origin = {
+            playlistId: 'stalker-1',
+            catalog: 'vod',
+            item: { id: '42' },
+        } as const;
+        expect(bindings.origin?.(origin)).toEqual(origin);
+        expect(saveCatalogSimilarReturn).not.toHaveBeenCalled();
+
+        routerMock.lastSuccessfulNavigation.mockReturnValue({ id: 14 });
+        saveCatalogSimilarReturn.mockReturnValue(true);
+        expect(bindings.origin?.(origin)).toEqual({
+            ...origin,
+            catalogReturnId: 14,
+        });
+        expect(saveCatalogSimilarReturn).toHaveBeenCalledWith(14);
     });
 
     it('passes provider-only mode to the matching regular VOD', async () => {
@@ -621,5 +656,32 @@ describe('StalkerCatalogDetailComponent provider presentation', () => {
 
         expect(locationMock.back).not.toHaveBeenCalled();
         expect(routerMock.navigateByUrl).not.toHaveBeenCalled();
+    });
+    it('shares accepted inline completion updates with the catalog before returning from detail', () => {
+        fixture.detectChanges();
+        fixture.componentInstance.inlinePlayback.set({
+            streamUrl: 'https://example.test/movie.webm',
+            title: 'Inline completion',
+            contentInfo: {
+                playlistId: 'stalker-1',
+                contentXtreamId: 42,
+                contentType: 'vod',
+            },
+        });
+        fixture.componentInstance.handleInlineTimeUpdate({
+            currentTime: 95,
+            duration: 100,
+        });
+        expect(applyPlaybackPosition).toHaveBeenCalledWith(
+            expect.objectContaining({
+                playlistId: 'stalker-1',
+                contentXtreamId: 42,
+                contentType: 'vod',
+                positionSeconds: 95,
+                durationSeconds: 100,
+            })
+        );
+        fixture.componentInstance.onVodBack();
+        expect(fixture.componentInstance.inlinePlayback()).toBeNull();
     });
 });

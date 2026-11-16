@@ -53,10 +53,14 @@ import {
     WorkspaceCategoryLockActionService,
 } from './workspace-category-lock-action.service';
 import { WorkspaceContextErrorViewComponent } from './components/workspace-context-error-view.component';
-import { hasActiveLiveCategoryRoute } from './workspace-context-panel-route.utils';
+import {
+    clearCategoryScope,
+    hasActiveLiveCategoryRoute,
+} from './workspace-context-panel-route.utils';
 import { WorkspaceShellContextDrawerService } from '@iptvnator/workspace/shell/util';
 import { foldSearchText } from '@iptvnator/shared/interfaces';
 import { dialogSize } from '@iptvnator/ui/components/dialog-size';
+import { WorkspaceShellSearchSyncService } from '../workspace-shell/services/workspace-shell-search-sync.service';
 
 type WorkspaceProvider = 'xtreams' | 'stalker' | 'playlists';
 
@@ -100,6 +104,7 @@ export class WorkspaceContextPanelComponent {
     private readonly router = inject(Router);
     private readonly xtreamStore = inject(XtreamStore);
     private readonly stalkerStore = inject(StalkerStore);
+    private readonly searchSync = inject(WorkspaceShellSearchSyncService);
     private readonly dialog = inject(MatDialog);
     private readonly destroyRef = inject(DestroyRef);
     private readonly translate = inject(TranslateService);
@@ -148,19 +153,21 @@ export class WorkspaceContextPanelComponent {
                 (section === 'itv' || section === 'radio'))
         );
     });
-    // Only while a category is selected: that is when the live layout
-    // renders the channels rail whose header offers the way back. Not in the
-    // open phone drawer either: its stylesheet ignores the folded state, so
-    // the tap would change nothing visible while persisting a preference
-    // that only bites once the window is wide again.
+    // Every live view carries its own way back (the channels header or the
+    // all-items header). Not in the open phone drawer: its stylesheet ignores
+    // the folded state, so the tap would change nothing visible while
+    // persisting a preference that only bites once the window is wide again.
+    // Nor on a blocked Xtream portal, whose error view has no way back and
+    // keeps the rail unfolded (the fold would only apply after a retry).
     readonly canHideCategories = computed(
         () =>
             this.presentation() === 'sidebar' &&
             this.isLiveSection() &&
             !this.contextDrawer?.isOpen() &&
-            (this.context().provider === 'xtreams'
-                ? this.xtreamSelectedCategoryId() !== null
-                : !!this.stalkerSelectedCategoryId())
+            !(
+                this.context().provider === 'xtreams' &&
+                this.xtreamStore.isContentBlocked()
+            )
     );
     private readonly hideCategoriesButton = viewChild('hideCategoriesButton', {
         read: ElementRef<HTMLElement>,
@@ -683,6 +690,22 @@ export class WorkspaceContextPanelComponent {
         this.contextDrawer?.close();
         this.categorySelected.emit();
 
+        const currentSelectedId = this.xtreamSelectedCategoryId();
+        if (
+            currentSelectedId !== null &&
+            Number(currentSelectedId) === categoryId
+        ) {
+            clearCategoryScope({
+                router: this.router,
+                provider: 'xtreams',
+                store: this.xtreamStore,
+                playlistId: context.playlistId,
+                section,
+                searchQuery: this.searchSync.searchQuery(),
+            });
+            return;
+        }
+
         if (section === 'live') {
             this.xtreamStore.setSelectedCategory(categoryId);
             const liveRouteHasCategory = hasActiveLiveCategoryRoute(
@@ -724,6 +747,24 @@ export class WorkspaceContextPanelComponent {
 
         this.contextDrawer?.close();
         this.categorySelected.emit();
+
+        const currentSelectedId = this.stalkerSelectedCategoryId();
+        if (
+            currentSelectedId &&
+            currentSelectedId !== '*' &&
+            currentSelectedId === categoryId
+        ) {
+            clearCategoryScope({
+                router: this.router,
+                provider: 'stalker',
+                store: this.stalkerStore,
+                playlistId: context.playlistId,
+                section,
+                searchQuery: this.searchSync.searchQuery(),
+            });
+            return;
+        }
+
         this.stalkerStore.setSelectedCategory(categoryId);
         this.stalkerStore.setPage(0);
 

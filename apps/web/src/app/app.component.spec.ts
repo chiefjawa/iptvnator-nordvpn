@@ -1,4 +1,9 @@
-import { EventEmitter } from '@angular/core';
+import {
+    Component,
+    EventEmitter,
+    input,
+    NO_ERRORS_SCHEMA,
+} from '@angular/core';
 import { ComponentFixture, TestBed, waitForAsync } from '@angular/core/testing';
 import { LazySnackBar } from '@iptvnator/services/lazy-snack-bar';
 import { Router } from '@angular/router';
@@ -54,6 +59,14 @@ jest.spyOn(global.console, 'error').mockImplementation(() => {
 class MockSettingsService {
     getValueFromLocalStorage = jest.fn().mockReturnValue(of(undefined));
     changeTheme = jest.fn();
+    changeThemeAccent = jest.fn();
+    changeSystemThemes = jest.fn();
+}
+
+@Component({ selector: 'app-startup-status', template: '' })
+class StartupStatusStub {
+    readonly routeReady = input(false);
+    readonly complete = () => true;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -179,7 +192,8 @@ describe('AppComponent', () => {
         })
             .overrideComponent(AppComponent, {
                 set: {
-                    template: '',
+                    imports: [StartupStatusStub],
+                    schemas: [NO_ERRORS_SCHEMA],
                 },
             })
             .compileComponents();
@@ -201,6 +215,23 @@ describe('AppComponent', () => {
     it('should create the component', () => {
         expect(component).toBeTruthy();
     });
+
+    it.each([
+        { isElectron: true, sibling: 'nextElementSibling' as const },
+        { isElectron: false, sibling: 'previousElementSibling' as const },
+    ])(
+        'keeps the server status outside the app viewport ($isElectron)',
+        ({ isElectron, sibling }) => {
+            Object.assign(runtimeCapabilities, { isElectron });
+            fixture.detectChanges();
+
+            const root = fixture.nativeElement as HTMLElement;
+            const viewport = root.querySelector('.app-viewport');
+            const statuses = root.querySelectorAll('app-source-sync-status');
+            expect(statuses).toHaveLength(1);
+            expect(viewport?.[sibling]).toBe(statuses[0]);
+        }
+    );
 
     it('should init component', () => {
         const storeDispatchSpy = jest.spyOn(store, 'dispatch');
@@ -239,35 +270,47 @@ describe('AppComponent', () => {
         );
     });
 
-    it('should apply saved settings and fetch stale epg data only', async () => {
-        const settings: Settings = {
-            ...DEFAULT_SETTINGS,
-            epgUrl: ['https://example.com/epg.xml'],
-            language: Language.SPANISH,
-            theme: Theme.DarkTheme,
-        };
-        epgBridge.checkFreshness = jest.fn().mockResolvedValue({
-            freshUrls: [],
-            staleUrls: settings.epgUrl,
-        });
-        settingsService.getValueFromLocalStorage.mockReturnValue(of(settings));
-        jest.spyOn(settingsService, 'changeTheme');
-        const dateLocales = TestBed.inject(AppDateLocaleService);
+    const guideUrl = 'https://example.test/epg.xml';
 
-        component.initSettings();
-        await fixture.whenStable();
+    it.each([
+        { saved: [guideUrl], format: 'an array' },
+        { saved: [null, guideUrl], format: 'an array with a null entry' },
+        { saved: guideUrl, format: 'a legacy string' },
+    ])(
+        'applies saved settings and refreshes EPG stored as $format',
+        async ({ saved }) => {
+            const urls = [guideUrl];
+            const settings = {
+                ...DEFAULT_SETTINGS,
+                epgUrl: saved,
+                language: Language.SPANISH,
+                theme: Theme.DarkTheme,
+            };
+            jest.spyOn(TestBed.inject(SettingsStore), 'epgUrl').mockReturnValue(
+                urls
+            );
+            epgBridge.checkFreshness = jest.fn().mockResolvedValue({
+                freshUrls: [],
+                staleUrls: urls,
+            });
+            settingsService.getValueFromLocalStorage.mockReturnValue(
+                of(settings)
+            );
+            jest.spyOn(settingsService, 'changeTheme');
+            const dateLocales = TestBed.inject(AppDateLocaleService);
 
-        expect(dateLocales.use).toHaveBeenCalledWith(Language.SPANISH);
-        expect(settingsService.changeTheme).toHaveBeenCalledWith(
-            Theme.DarkTheme
-        );
-        expect(epgBridge.checkFreshness).toHaveBeenCalledWith(
-            settings.epgUrl,
-            12
-        );
-        expect(epgService.fetchEpg).toHaveBeenCalledWith(settings.epgUrl);
-        expect(snackBar.open).not.toHaveBeenCalled();
-    });
+            component.initSettings();
+            await fixture.whenStable();
+
+            expect(dateLocales.use).toHaveBeenCalledWith(Language.SPANISH);
+            expect(settingsService.changeTheme).toHaveBeenCalledWith(
+                Theme.DarkTheme
+            );
+            expect(epgBridge.checkFreshness).toHaveBeenCalledWith(urls, 12);
+            expect(epgService.fetchEpg).toHaveBeenCalledWith(urls);
+            expect(snackBar.open).not.toHaveBeenCalled();
+        }
+    );
 
     it('normalizes legacy Portuguese before applying the startup language', () => {
         const settings: Settings = {
@@ -284,7 +327,13 @@ describe('AppComponent', () => {
     });
 
     it('does not reimport a deleted source from a late startup freshness response', async () => {
-        await TestBed.inject(SettingsStore).loadSettings();
+        const settingsStore = TestBed.inject(SettingsStore);
+        await settingsStore.loadSettings();
+        const urls = [guideUrl];
+        jest.spyOn(settingsStore, 'epgUrl').mockReturnValue(urls);
+        settingsService.getValueFromLocalStorage.mockReturnValue(
+            of({ ...DEFAULT_SETTINGS, epgUrl: urls })
+        );
         let finishFreshness!: (value: {
             freshUrls: string[];
             staleUrls: string[];
@@ -295,23 +344,18 @@ describe('AppComponent', () => {
                     finishFreshness = resolve;
                 })
         );
-        const pending = (
-            component as unknown as {
-                fetchStaleEpgData(urls: string[]): Promise<void>;
-            }
-        ).fetchStaleEpgData(['https://removed.example/guide.xml']);
+        component.initSettings();
         await Promise.resolve();
+        expect(epgBridge.checkFreshness).toHaveBeenCalledWith(urls, 12);
         const sources = TestBed.inject(EpgSourceSettingsService);
         sources.revision.update((value) => value + 1);
         sources.changed$.next();
         finishFreshness({
             freshUrls: [],
-            staleUrls: ['https://removed.example/guide.xml'],
+            staleUrls: urls,
         });
-        await pending;
-        expect(epgService.fetchEpg).not.toHaveBeenCalledWith([
-            'https://removed.example/guide.xml',
-        ]);
+        await fixture.whenStable();
+        expect(epgService.fetchEpg).not.toHaveBeenCalledWith(urls);
     });
 
     it('does not fetch EPG settings when the EPG bridge cannot import EPG', async () => {
@@ -320,6 +364,9 @@ describe('AppComponent', () => {
             epgUrl: ['https://example.com/epg.xml'],
         };
         epgBridge.supportsImport = false;
+        jest.spyOn(TestBed.inject(SettingsStore), 'epgUrl').mockReturnValue(
+            settings.epgUrl
+        );
         settingsService.getValueFromLocalStorage.mockReturnValue(of(settings));
 
         component.initSettings();

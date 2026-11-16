@@ -174,10 +174,10 @@ function createService(
 }
 
 describe('AppUpdateService', () => {
-    it('reports unsupported status outside packaged builds', () => {
+    it('reports unsupported status outside packaged builds', async () => {
         const { service, updater } = createService({ isPackaged: false });
 
-        expect(service.getStatus()).toEqual({
+        await expect(service.checkForUpdates()).resolves.toEqual({
             currentVersion: '0.22.0',
             manualDownloadUrl:
                 'https://github.com/chiefjawa/iptvnator-nordvpn/releases/latest',
@@ -186,6 +186,7 @@ describe('AppUpdateService', () => {
             channel: 'stable',
             installedChannel: 'stable',
         });
+        expect(updater.checkForUpdates).not.toHaveBeenCalled();
         expect(updater.autoDownload).toBe(true);
     });
 
@@ -325,6 +326,71 @@ describe('AppUpdateService', () => {
         await service.checkForUpdates();
 
         expect(updater.checkForUpdates).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps the known release through a failed retry until a new verdict replaces it', async () => {
+        const { service, updater } = createService();
+        service.handleUpdateAvailable({ version: '0.24.0' });
+        service.handleError(new Error('Synthetic download failure'));
+        updater.checkForUpdates.mockRejectedValueOnce(
+            new Error('Synthetic update check failure')
+        );
+
+        const retry = service.checkForUpdates();
+        expect(service.getStatus()).toMatchObject({
+            latestVersion: '0.24.0',
+            status: ELECTRON_BRIDGE_APP_UPDATE_STATUSES.Checking,
+        });
+        await expect(retry).resolves.toMatchObject({
+            latestVersion: '0.24.0',
+            release: { version: '0.24.0' },
+            status: ELECTRON_BRIDGE_APP_UPDATE_STATUSES.Error,
+        });
+
+        service.handleUpdateNotAvailable({ version: '0.22.0' });
+        expect(service.getStatus()).toMatchObject({
+            latestVersion: '0.22.0',
+            status: ELECTRON_BRIDGE_APP_UPDATE_STATUSES.NotAvailable,
+        });
+    });
+
+    it('does not retain a previous-channel download when a retry checks the newly saved channel', async () => {
+        const { service, updater } = createService();
+        await service.checkForUpdates();
+        service.handleUpdateDownloaded({ version: '0.24.0' });
+        service.setChannel('nightly');
+        service.handleError(new Error('Synthetic install failure'));
+        updater.checkForUpdates.mockRejectedValueOnce(
+            new Error('Synthetic update check failure')
+        );
+
+        await expect(service.checkForUpdates()).resolves.toMatchObject({
+            latestVersion: undefined,
+            release: undefined,
+            verdictChannel: 'nightly',
+            status: ELECTRON_BRIDGE_APP_UPDATE_STATUSES.Error,
+        });
+    });
+
+    it('does not turn a no-update verdict into an offer during a failed recheck', async () => {
+        const { service, updater } = createService();
+        service.handleUpdateNotAvailable({ version: '0.22.0' });
+        updater.checkForUpdates.mockRejectedValue(
+            new Error('Synthetic update check failure')
+        );
+
+        const retry = service.checkForUpdates();
+        expect(service.getStatus().latestVersion).toBeUndefined();
+        await expect(retry).resolves.toMatchObject({
+            latestVersion: undefined,
+            release: undefined,
+            status: ELECTRON_BRIDGE_APP_UPDATE_STATUSES.Error,
+        });
+        await expect(service.checkForUpdates()).resolves.toMatchObject({
+            latestVersion: undefined,
+            release: undefined,
+            status: ELECTRON_BRIDGE_APP_UPDATE_STATUSES.Error,
+        });
     });
 
     it('checks packaged non-AppImage Linux builds through GitHub manual fallback', async () => {
@@ -535,6 +601,21 @@ describe('AppUpdateService', () => {
         expect(updater.quitAndInstall).toHaveBeenCalledTimes(1);
     });
 
+    it('ignores a second install while quitting and accepts a retry after failure', () => {
+        const { service, updater } = createService();
+        const update = { version: '0.24.0' };
+        updater.emit('update-downloaded', update);
+
+        service.installUpdate();
+        service.installUpdate();
+        expect(updater.quitAndInstall).toHaveBeenCalledTimes(1);
+
+        updater.emit('error', new Error('Synthetic install failure'));
+        updater.emit('update-downloaded', update);
+        service.installUpdate();
+        expect(updater.quitAndInstall).toHaveBeenCalledTimes(2);
+    });
+
     it('stands the close guard down before quitAndInstall', () => {
         // quitAndInstall closes the windows before 'before-quit' (macOS), so
         // an armed unsaved-settings guard would intercept that close and
@@ -724,6 +805,49 @@ describe('AppUpdateService', () => {
         });
     });
 
+    it.each(['update-available', 'update-not-available'])(
+        'checks the latest saved channel after an in-flight %s event',
+        async (oldVerdict) => {
+            const { service, updater, win } = createService();
+            let finishStable!: () => void;
+            const stable = new Promise<void>((resolve) => {
+                finishStable = resolve;
+            });
+            updater.checkForUpdates
+                .mockImplementationOnce(async () => {
+                    await stable;
+                    updater.emit(oldVerdict, { version: '0.24.0' });
+                })
+                .mockImplementationOnce(async () => {
+                    updater.emit('update-available', {
+                        version: '0.25.0-nightly.20261110.1',
+                    });
+                });
+
+            const pending = service.checkForUpdates();
+            service.setChannel('nightly');
+            expect(updater.checkForUpdates).toHaveBeenCalledTimes(1);
+
+            finishStable();
+            await expect(pending).resolves.toMatchObject({
+                channel: 'nightly',
+                verdictChannel: 'nightly',
+                latestVersion: '0.25.0-nightly.20261110.1',
+            });
+            expect(updater.checkForUpdates).toHaveBeenCalledTimes(2);
+            expect(updater.setFeedURL).toHaveBeenLastCalledWith(
+                expect.objectContaining({ repo: 'iptvnator-nordvpn-nightly' })
+            );
+            expect(win.webContents.send).not.toHaveBeenCalledWith(
+                expect.anything(),
+                expect.objectContaining({
+                    channel: 'nightly',
+                    latestVersion: '0.24.0',
+                })
+            );
+        }
+    );
+
     it('stamps every verdict with the channel it was checked on', async () => {
         const { service } = createService();
 
@@ -765,6 +889,37 @@ describe('AppUpdateService', () => {
             status: ELECTRON_BRIDGE_APP_UPDATE_STATUSES.Available,
             installedChannel: 'nightly',
         });
+    });
+
+    it('ignores a manual update verdict from the previous channel', async () => {
+        let finishStable!: () => void;
+        const stable = new Promise<void>((resolve) => {
+            finishStable = resolve;
+        });
+        const respond = createChannelReleaseFetcher();
+        const fetcher = jest.fn(async (url: string) => {
+            await stable;
+            return respond(url);
+        });
+        const { service, win } = createService({ platform: 'linux', fetcher });
+
+        const pending = service.checkForUpdates();
+        service.setChannel('nightly');
+        finishStable();
+
+        await expect(pending).resolves.toMatchObject({
+            channel: 'nightly',
+            verdictChannel: 'nightly',
+            latestVersion: '0.23.1-nightly.20260915.7',
+        });
+        expect(fetcher).toHaveBeenCalledTimes(2);
+        expect(win.webContents.send).not.toHaveBeenCalledWith(
+            expect.anything(),
+            expect.objectContaining({
+                channel: 'nightly',
+                latestVersion: '0.24.0',
+            })
+        );
     });
 
     it('never downgrades a nightly build that follows the stable channel', async () => {

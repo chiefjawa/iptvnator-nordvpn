@@ -14,6 +14,22 @@ function people(count: number): DownloadMetadataPerson[] {
 }
 
 describe('download metadata snapshot factories', () => {
+    it('retains unknown-season display metadata without changing stored coordinates', () => {
+        const snapshot = createSeriesEpisodeDownloadSnapshot({
+            language: 'en',
+            title: 'Flat collection',
+            episode: {
+                seasonNumber: 9,
+                episodeNumber: 189,
+                seasonUnknown: true,
+            },
+        });
+        expect(snapshot.episode).toEqual({
+            seasonNumber: 9,
+            episodeNumber: 189,
+            seasonUnknown: true,
+        });
+    });
     it('creates an allowlisted movie snapshot without provider secrets or stream URLs', () => {
         const snapshot = createMovieDownloadSnapshot({
             language: 'de',
@@ -82,6 +98,36 @@ describe('download metadata snapshot factories', () => {
             },
             enrichedAt: '2026-07-31T08:30:00.000Z',
         });
+    });
+
+    it('stores a numeric provider category id as a string', () => {
+        const episode = {
+            seasonNumber: 1,
+            episodeNumber: 1,
+        };
+
+        expect(
+            createSeriesEpisodeDownloadSnapshot({
+                language: 'en',
+                title: 'Signal House',
+                providerCategoryId: 617,
+                episode,
+            }).providerCategoryId
+        ).toBe('617');
+        expect(
+            createMovieDownloadSnapshot({
+                language: 'en',
+                title: 'Night Ferry',
+                providerCategoryId: 617,
+            }).providerCategoryId
+        ).toBe('617');
+        expect(
+            createMovieDownloadSnapshot({
+                language: 'en',
+                title: 'Night Ferry',
+                providerCategoryId: Number.NaN,
+            })
+        ).not.toHaveProperty('providerCategoryId');
     });
 
     it('bounds people to 30 and genres to 20 in deterministic input order', () => {

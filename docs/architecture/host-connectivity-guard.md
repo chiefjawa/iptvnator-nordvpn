@@ -57,6 +57,11 @@ stream response, because axios stream mode stops its timeout handler at headers.
 Truncated, malformed and timed-out final bodies retain their received response
 status for reachability classification; cancellation retains its own semantics.
 
+The PWA backend separately caps downloaded and decompressed provider bodies
+(64 MiB by default, configurable with `IPTVNATOR_MAX_PROVIDER_RESPONSE_MB`).
+Exceeding that size does not count as a connection failure: the provider has
+answered. See the [PWA response policy](pwa-self-hosted.md#provider-registration-and-response-limits).
+
 ### Scope: portal calls only
 
 Both runtimes guard the portal API paths and nothing else. Playlist and XMLTV
@@ -178,7 +183,9 @@ disables automatic redirects and holds one admission for the entire chain.
 `ProviderRequestError.initialResponded` becomes true only after receiving an
 actual redirect response. A later transport or DNS failure, URL policy refusal,
 invalid location, cycle or exhausted budget therefore clears the initial
-endpoint's failure streak when the chain settles. This also handles redirects
+endpoint's failure streak when the chain settles, including when the Xtream
+browser request disconnects after a redirect. A disconnect before any response
+does not count as a failure. This also handles redirects
 that change only the query. It does not release the half-open slot early: the
 route retains ownership through validation, all hops and the final body, and
 releases in `finally` even when reporting throws. Before any redirect, initial

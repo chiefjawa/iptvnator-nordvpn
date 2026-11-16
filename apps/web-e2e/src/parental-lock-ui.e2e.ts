@@ -1,12 +1,12 @@
 import type { Locator, Page } from '@playwright/test';
 import { join } from 'path';
-import { expect, test } from './fixtures';
+import { expect, test } from './pwa-mock.fixture';
 import { pressTab, surfaceContrast } from './e2e-helpers';
+import { applyUiTheme } from './ui-consistency.fixture';
 import {
     addStalkerPortal,
     addXtreamPortal,
     interceptPwaProviderRequests,
-    resetPwaMockServers,
 } from './sources-pwa.helpers';
 
 /**
@@ -36,10 +36,7 @@ const PHONE = { width: 375, height: 812 };
 const THEMES = ['light', 'dark'] as const;
 
 async function setTheme(page: Page, theme: (typeof THEMES)[number]) {
-    await page.evaluate(
-        (dark) => document.body.classList.toggle('dark-theme', dark),
-        theme === 'dark'
-    );
+    await applyUiTheme(page, theme === 'dark');
 }
 
 async function enableParentalLock(page: Page): Promise<void> {
@@ -219,8 +216,7 @@ async function expectDialogFitsPhone(
 }
 
 test.describe('Parental lock UI', () => {
-    test.beforeEach(async ({ page, request }) => {
-        await resetPwaMockServers(request);
+    test.beforeEach(async ({ page }) => {
         await interceptPwaProviderRequests(page);
         await page.goto('/');
     });
@@ -228,9 +224,10 @@ test.describe('Parental lock UI', () => {
     test('@parental @xtream PWA dialog, locked-categories row and PIN error', async ({
         page,
         browserName,
+        pwaMocks,
     }) => {
         test.slow();
-        await addXtreamPortal(page, 'Lock UI Portal');
+        await addXtreamPortal(page, 'Lock UI Portal', pwaMocks);
         const portalUrl = page.url();
         await enableParentalLock(page);
         // A reload starts locked: the unlock lives in memory only.
@@ -314,9 +311,10 @@ test.describe('Parental lock UI', () => {
     test('@parental @stalker lock dialog rows, list border and phone width', async ({
         page,
         browserName,
+        pwaMocks,
     }) => {
         test.slow();
-        await addStalkerPortal(page, 'Lock UI Stalker');
+        await addStalkerPortal(page, 'Lock UI Stalker', pwaMocks);
         const portalUrl = page.url();
         await enableParentalLock(page);
         await page.goto(portalUrl);
@@ -333,7 +331,8 @@ test.describe('Parental lock UI', () => {
             'app-stalker-category-lock-dialog'
         );
         await expect(dialog.locator('.bulk-actions button').last()).toHaveCSS(
-            'border-top-left-radius', '8px'
+            'border-top-left-radius',
+            '8px'
         );
         const rows = dialog.locator('.category-item');
         await expect(rows.first()).toBeVisible();

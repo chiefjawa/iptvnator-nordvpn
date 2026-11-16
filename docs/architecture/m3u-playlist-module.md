@@ -13,6 +13,15 @@ The M3U playlist module provides:
 - Per-playlist group visibility management in the groups view
 - Video playback with multiple player backends
 
+## In-memory playlist state
+
+The NgRx playlist entity map holds metadata only. Parsed channels live in the
+active `channels` cache; the full source record remains in persistence and in
+owned action payloads used by effects. Shared-source inventory replacement keeps
+the active cache and removes deleted metadata without retaining another parsed
+payload. Shared hydration replaces the active channels while preserving local
+favorites and EPG preferences, and clears any previously retained entity payload.
+
 ## Adding a URL source
 
 The Add playlist dialog acquires a definition through
@@ -188,6 +197,64 @@ There is intentionally **no URL validation** (upstream removed it in 0.15.0): an
 
 The behavioral contract is guarded by `apps/web/src/app/iptv-playlist-parser.contract.spec.ts` (jest maps the module to the real parser source) and by the fork's own test suite.
 
+## EPG choice during M3U import
+
+The M3U URL, file and text forms share a default-on EPG checkbox. It only
+controls sources declared in the imported M3U; entering a URL does not trigger
+a metadata or EPG request. The choice survives import-method switches in the
+open dialog and resets for a new import or Clear.
+Global EPG opt-out hides this checkbox without changing the source's import
+preference, so re-enabling EPG can use its declared sources normally.
+
+The self-hosted backend's `/parse` response uses the shared M3U playlist
+builder, including detected and enabled EPG URLs. URL imports and first-time
+source projections therefore receive the same header-derived guide selection
+as local file and text imports; the backend only replaces IDs and timestamps
+with its injected values.
+
+`Playlist.autoImportEpg: false` retains detected addresses as candidates without
+enabling them. An absent flag keeps the legacy default-on behavior. Refresh,
+local source projection and backup/restore preserve this preference, including
+when a new EPG address appears. Explicitly enabled manual sources still work.
+New backups write an explicit boolean plus enabled, manual and disabled EPG
+sets, so a fresh installation restores all choices, including unknown origins.
+Restore applies those saved overrides before the imported preference; empty
+arrays clear previous overrides. Legacy archives that omit a field retain that
+field from the existing playlist when merged.
+An old archive without EPG headers or override fields also retains existing
+enabled guide addresses whose provenance was never recorded.
+The preference belongs to local playlist state, like manual and disabled EPG
+selections, rather than the portable `SourceDefinition` connection.
+If the source server deduplicates an import to a canonical ID that is not yet
+cached locally, its first projection inherits this import's local EPG choice
+and selection. An existing local canonical row retains its device preferences.
+
+## Xtream suggestion during URL import
+
+The URL form locally recognizes known Xtream API/download endpoints carrying
+one username and password. It offers an optional handoff to the existing
+Xtream form with the normalized server, credentials, entered title and custom
+User-Agent. Recognition makes no requests and does not confirm API support;
+the existing explicit connection test remains available in the Xtream form.
+Links with additional query parameters, fragments, missing or duplicate
+credentials stay on the M3U path without a suggestion, since those values
+cannot safely be carried by a standard Xtream connection.
+Credentials are read directly from the complete URL through the existing
+Xtream URL helpers; the provider-message scanner's prose cleanup never runs
+on a URL handoff, preserving punctuation and Unicode in account values.
+
+The dialog’s shared import drafts preserve the original M3U link, title and
+User-Agent across method switches. The return action uses the same method
+switch and cancellation path; accepting the suggestion does not add or convert
+a stored playlist. Xtream test requests and
+the saved source use the same optional User-Agent.
+
+URL and Xtream import keep User-Agent in the shared native Additional settings
+disclosure. Prefilling a nonblank value reveals it; clearing or manually folding
+the section keeps the current user-controlled disclosure state. The PWA URL form
+shows a short server-transmission summary and retains the full backend trust
+explanation in an expandable disclosure.
+
 ## User-Agent for URL sources
 
 The M3U URL form accepts an optional User-Agent, including after an Auto-detect
@@ -213,6 +280,10 @@ same proxy. This requires the matching web backend. The browser never sets a
 User-Agent header itself, and this does not add custom browser playback-header
 support. Electron playback retains existing per-header precedence: channel
 headers override playlist defaults. File, text, and portal imports are unchanged.
+
+In the PWA, the source stays busy through the catalog write. A committed
+write publishes the updated channels and confirms the refresh. An aborted
+write reports a refresh error and keeps the previous catalog available.
 
 Regression coverage uses synthetic UA-gated HTTP endpoints in
 `playlist-auto-refresh.e2e.ts` (Electron) and `self-hosted.e2e.ts` (PWA), plus
@@ -311,6 +382,13 @@ rollback before it escapes to the benchmark lifecycle.
 Diagnostic artifacts require separate renderer, main, and database-worker CPU
 profiles plus renderer/main/database-worker heap snapshots and a Chromium
 trace; raw profiles remain ignored.
+
+## Playlist refresh (PWA)
+
+The explicit refresh loads `pwa-playlist-refresh.ts` on demand. It publishes
+the saved catalog and reports success after persistence resolves. Standalone
+storage waits for the IndexedDB transaction to commit. A write failure
+reports an error and leaves the saved catalog in place.
 
 ## Playlist Refresh And Startup Auto-Update (Electron)
 
@@ -985,8 +1063,33 @@ import and lookup. Two additional lists preserve user edits:
 
 - `Playlist.manualEpgUrls` stores URLs the user explicitly added for this
   playlist, including detected catalog URLs the user manually enabled.
-- `Playlist.disabledEpgUrls` stores detected URLs the user removed from this
+- `Playlist.disabledEpgUrls` stores source URLs the user removed from this
   playlist so playlist refreshes do not silently re-enable them.
+
+The playlist editor's main Save includes valid new EPG rows in the same metadata
+update as the title and other fields. Draft form controls are never persisted;
+blank rows do not change the stored source set. A failed shared-server save keeps
+the draft available for retry. The separate Save EPG sources action still applies
+only EPG changes immediately; Close does not undo it or an applied source removal.
+Both Save actions wait for pending EPG removals before assembling their source
+state. Main Save prevents new source mutations while it waits and persists, so
+late cleanup cannot overwrite a newly added EPG row.
+
+The editor labels saved rows by recorded provenance: detected URLs are “From
+playlist”, manual-only URLs are “Added manually”, and older rows without either
+record use “Saved source”. Do not infer detection from enabled URLs. SQLite
+metadata and source projections preserve that distinction, including
+legacy rows with only an enabled set. Unknown-origin enabled guides survive
+metadata edits and delayed source writes without being marked as detected.
+Removing one records an exclusion, so a later header parse cannot re-enable it.
+The detected summary counts the intersection of normalized enabled and detected URLs, excluding
+manual-only sources, and describes current enablement rather than initial automatic
+selection. A collapsed list exposes detected remote URLs that are not enabled.
+Its rows mount only while open, initially 25 at a time; Load more reveals the
+next batch and moves focus to its first action. Closing resets the batch limit;
+enabling one applies immediately, records the explicit manual selection and removes
+only that URL's disabled marker. Global EPG membership is a separate visible status;
+adding a URL to global settings does not remove it from the playlist.
 
 - Up to five detected URLs are enabled automatically.
 - Larger header lists are treated as provider catalogs. The importer keeps all
@@ -1017,6 +1120,9 @@ These URLs are playlist-scoped by default:
   EPG fetches only after the playlist persistence call succeeds, and metadata
   updates that do not include any EPG source fields do not evaluate the fetch
   plan.
+  An awaited shared-server save publishes metadata with `persist: false`; it
+  still evaluates EPG changes after that successful save without another write
+  or cancellation of an unrelated pending metadata write.
 - The Electron EPG database stores `source_url` on imported programs so current
   program lookups can ask for the active playlist's EPG sources first. Existing
   databases backfill this column from `epg_channels.source_url` once, in bounded
@@ -1075,8 +1181,13 @@ These URLs are playlist-scoped by default:
   names (Cyrillic, Greek, …) a `LOWER()`-only match would miss channels whose
   M3U name and EPG `display_name` share the same casing — the raw exact match
   keeps parity with the timeline's single-channel exact-display-name lookup, and
-  the JS `resolveChannelMetadataCandidate` then folds with full-Unicode
-  `toLowerCase()`. The "airing now" window is compared with timezone-aware SQLite
+  the JS `resolveEpgChannelCandidate` then folds with full-Unicode
+  `toLowerCase()`, using id/display-name lookup tables built once per candidate
+  list (`epg-channel-candidate-index.util.ts`) rather than scanning candidates
+  per key. Every id list bound into SQL on this path (candidate keys,
+  current-programme channel ids, manual-mapping keys) is chunked below SQLite's
+  32,766-variable limit, so playlists with tens of thousands of channels still
+  resolve. The "airing now" window is compared with timezone-aware SQLite
   `datetime()` on both sides (`EpgQueryService.isAiringAt`), not raw string
   comparison: stored EPG timestamps often carry an offset (e.g. `+03:00`) while
   `now` is built as UTC (`…Z`), so a lexical compare would be wrong by the offset
@@ -1148,6 +1259,43 @@ These URLs are playlist-scoped by default:
 
 ## EPG Integration
 
+### Global EPG preference
+
+`Settings.epgEnabled` is a default-on opt-out shared by Electron and the PWA.
+Settings → EPG stages the switch until Save. Turning it off preserves source
+addresses, mappings and committed XMLTV data, while hiding programme panels,
+guide commands, row previews and EPG source editors. Channel logos supplied by
+the playlist or provider remain visible; XMLTV-only artwork is not requested.
+
+`EpgPreferencesService` gates import and lookup transports. Settings hydration
+blocks requests until the saved preference is known. Preference changes retire
+the source lookup revision, which clears ephemeral previews and fences late
+responses across XMLTV, portal stores, collections and the dashboard. Electron's
+`EPG_SET_ENABLED` drains active and queued imports without clearing the database.
+Startup synchronizes the native preference in the existing source-reconciliation
+IPC before reconciling source data, including when a renderer reopens over a
+reused native worker. Its acknowledgement avoids a separate enable command.
+Actual changes still synchronize the worker; overlapping updates use the latest
+acknowledgement and failures retry. Completed settings writes also retire older
+EPG activation continuations, so delayed source reconciliation cannot re-enable EPG
+after a newer saved opt-out; failed writes do not retire the committed change.
+Reconciliation after a native acknowledgement uses the latest committed source
+URLs, so an older save cannot restore obsolete ownership.
+Suspension clears session fetch markers after writers drain, so a source that
+becomes stale while disabled can refresh on resumption; fresh stored data still
+skips downloading through the ordinary freshness check.
+The resumable list follows `filterPlaylistEpgUrlsForFetch`: global sources stay
+eligible, while local playlist paths require explicit manual provenance. The
+ownership inventory remains intact for reconciliation and lookup retirement.
+Read helpers for programme and channel metadata lookups load on the first
+subscribed lookup, keeping source imports and settings hydration on the small
+startup path. Concurrent reads share that module; failed chunk loads can retry.
+Requests retain their source revision across loading, so a retired request
+cannot start after the chunk arrives or survive an EPG off/on cycle.
+Re-enabling restores ordinary loading and freshness checks without a restart.
+Archive browsing through the programme guide is unavailable while EPG is off.
+
+
 ### Xtream channel-row programme refresh
 
 The "current programme" line under each Xtream Live TV channel used to be
@@ -1207,20 +1355,23 @@ side — over one shared `EpgQueueService`:
 ### XMLTV response compression
 
 The Electron EPG worker decodes HTTP `Content-Encoding` layers in reverse
-order before parsing XMLTV. The existing URL (including redirects), MIME type
-and filename checks identify gzip files independently of HTTP compression.
-When both a gzip file hint and an HTTP gzip layer are present, a streaming
-stage checks the decoded body's first two bytes (`1F 8B`). A remaining gzip
-signature triggers exactly one additional file decompression; otherwise the
-body passes through unchanged. This supports both genuinely double-compressed
-feeds and providers that describe a single gzip layer with both metadata forms.
-Other decoding paths retain their existing behavior.
+order before parsing XMLTV. URL (including redirects), MIME type and filename
+checks identify gzip (`.gz`) and XZ (`.xz`) files independently of HTTP
+compression. Remote responses without any file-compression hint are not probed.
+After HTTP decoding, a streaming stage checks up to six leading bytes for gzip
+(`1F 8B`) or XZ (`FD 37 7A 58 5A 00`). A matching signature triggers exactly
+one file decompression; otherwise the body passes through unchanged. This also
+supports providers describing a single gzip layer with both metadata forms.
+XZ uses `xz-decompress`, a streaming WebAssembly decoder embedded in its
+JavaScript package; no native addon or separate WASM asset is required.
 
 The probe preserves bytes across chunk boundaries and keeps bounded buffering
-and stream backpressure. Invalid or truncated gzip fails the import; it is not
-retried as plain XML. Source errors and consumer cancellation terminate the
-whole decoding chain. The decoder does not recursively unpack file layers or
-change XML parsing, source reconciliation, or database persistence contracts.
+and stream backpressure. Recognized but invalid or truncated gzip/XZ fails the
+import; it is not retried as plain XML. Source errors and consumer cancellation
+terminate the whole decoding chain. The decoder does not recursively unpack
+file layers or change XML parsing, source reconciliation, or database persistence
+contracts. Decoder tests cover split signatures, HTTP layers, corrupt/truncated
+files, source errors and cancellation for both file formats.
 
 After all decompression stages, the parser worker uses a single UTF-8 stream
 decoder per import. It retains incomplete multibyte characters across chunks
@@ -1252,10 +1403,11 @@ In the worker, `openEpgSourceStream()` (`epg-source-stream.ts`) is the single
 entry that yields decoded XMLTV bytes: remote sources still go through
 `requestWithValidatedRedirects` with the private-network/TLS trust policy,
 while local sources are read with `fs.createReadStream` behind the same
-signature-sniffing optional gunzip stage the HTTP path uses, so `.xml`,
-`.xml.gz` and an extension-less gzip file all parse. A missing file, a
-directory, or a truncated gzip fail the import with a plain message; nothing
-is retried as XML.
+signature-sniffing decompression stage the HTTP path uses, so `.xml`,
+`.xml.gz`, `.xml.xz` and extension-less gzip/XZ files all parse. The native
+XMLTV picker includes `xz` in its extension filter. A missing file, a
+directory, or a truncated compressed file fails the import; nothing is retried
+as XML.
 
 **Provenance rule.** Only values the user chose or typed by hand may be
 local, and the decision is enforced in the main process, not in the form.
@@ -1451,7 +1603,8 @@ untouched `app-web-player-view` into a 128 px docked strip
 collapses to one 48 px line (`epg-guide:dock-collapsed`), which is also the
 fixed height of the strip shown for an external MPV/VLC session — that one has
 no video to reveal, so it hides the Collapse toggle (`collapsible=false`) and
-writes no preference. Nothing remounts, so playback and native-view Embedded
+writes no preference. Short screens also use the compact strip without
+changing the saved dock preference. Nothing remounts, so playback and native-view Embedded
 MPV bounds survive. While the guide is open the docked `.video-player` carries
 `data-player-shortcuts-suspended`, which makes `ControlsShortcuts` (shared and
 legacy player shortcuts alike) yield ↑/↓, Space, F and M to the guide's own
@@ -1864,6 +2017,11 @@ EPG array requests reconciliation even when the committed URLs already match
 (for example retrying a failed cleanup); removing a row marks that array dirty,
 and only successful saving clears it. Startup reconciliation always runs.
 
+`SettingsStore` normalizes saved global XMLTV sources on load. It accepts a
+single legacy string and skips non-string or blank entries while keeping
+local guide paths. The startup refresh and channel rows read this list from
+the store.
+
 `EpgSourceSettingsService` waits for `PlaylistsService.getAllPlaylists()` (which
 performs the legacy playlist migration) before invoking `EPG_RECONCILE_SOURCES`.
 Startup includes an empty global list and does not prune after a failed settings
@@ -1985,8 +2143,12 @@ filter never hides the sources it is waiting for. See the [UI guidelines](iptvna
 Checks are demand-driven, never a startup readiness barrier: four at a time,
 two per origin, shared between surfaces. Known results remain visible during
 refresh (60-second evidence TTL, 15-second uncertain-result TTL). Background
-requests have a five-second aggregate deadline; explicit checks have fifteen
-seconds, including a handoff from a running background check. M3U streams are
+requests have a five-second first attempt. On timeout they rejoin the queue for
+one fifteen-second attempt with a fresh request ID, without publishing the
+first timeout. Queued manual checks run ahead of passive retries. A manual
+check can share the background retry, but its fifteen-second deadline includes
+the time already spent waiting. Cancelling one consumer leaves the request
+running only while another consumer still needs it. M3U streams are
 destroyed on completion, limit, error or cancellation,
 including when a provider ignores Range. Every intermediate redirect stream is
 closed before the next hop is validated or requested. Header/TLS and validated redirect
@@ -1999,15 +2161,16 @@ during a probe, both the cache and the waiting caller retain that newer result.
 
 Account-disabled/expired evidence is separate from authorization errors,
 network failures and connectivity-guard pauses. Only explicit account evidence
-is eligible for automatic cleanup selection. Statuses are session-only;
-committed SQLite connection edits and deletions publish inventory events that
+is eligible for automatic cleanup selection. Live snapshots are session-only.
+Committed SQLite connection edits and deletions publish inventory events that
 invalidate pending evidence, including deferred explicit retries. Retry now explicitly
 resets the portal guard; ordinary checks do not. Credentials and response bodies
 are never included in indicator text.
 
 Explicit source-health checks retain their deadline while queued, including
 background jobs promoted by Retry. Expired queued checks resolve without opening
-a transport; cancellation and admission clear the queue timer.
+a transport or recording a source failure. Cancellation and admission clear the
+queue timer.
 
 ### Desktop inactive-source cleanup
 
@@ -2094,3 +2257,27 @@ of them and `enqueueAll` queues the batch, because stopping at the first match
 would silently drop the rest of the selection. Adding an exec code to
 `linux.executableArgs` would suppress the `%U` but also pass that code to the
 app as a real argument, so it is not an option.
+
+
+## Optional shared favorites
+
+The [self-hosted favorites contract](pwa-self-hosted.md#favorites-synchronization)
+keeps M3U URL-based membership: duplicate URLs share a favorite. Version 1 hashes
+the exact URL and resolves legacy IDs through the local catalog, without title or
+tvg-id inference. Explicit favorite actions use the optional composition bridge;
+source/refresh writes never infer uploads from playlist snapshots. Original local
+favorites remain available for preview/import. Unmatched references remain
+unresolved; switching profiles does not transplant memberships or queued actions.
+
+
+## Optional shared recently-viewed history
+
+The [history consent](pwa-self-hosted.md#recently-viewed-synchronization) keeps
+exact URL-based membership and resolves received hashes against this source's
+current channel catalog. Duplicate URLs share one history entry; names, tvg-id and
+random local channel IDs do not establish a match. Playback-confirmation ownership
+is captured before waiting and retired with its source/profile. Legacy rows remain
+local until explicit preview/import; URL and credential-bearing metadata do not
+travel through the history API.
+Received and newly confirmed rows recover artwork, XMLTV identifiers/names and
+group labels from the matched local channel; these fields remain device-local.

@@ -1,5 +1,13 @@
 import { expect, test } from '@playwright/test';
-import { addSource, nav, start, stalker, xtream } from './helpers';
+import {
+    fillTvField,
+    chooseTv,
+    addSource,
+    nav,
+    start,
+    stalker,
+    xtream,
+} from './helpers';
 test('Stalker lazy episodes resolve their own media file when another show owns the episode-number file', async ({
     page,
 }) => {
@@ -75,7 +83,10 @@ test('Xtream: source, live preview/fullscreen, movie, episode, favorites and rel
     await nav(page, 'Favorites');
     await expect(page.locator('.poster-grid .poster-card')).toHaveCount(1);
     await nav(page, 'Search');
-    await page.getByLabel('Search this source').fill('zzzz-unavailable');
+    await fillTvField(
+        page.getByLabel('Search this source'),
+        'zzzz-unavailable'
+    );
     await expect(page.locator('.poster-grid .poster-card')).toHaveCount(0);
     expect(await page.locator('video').count()).toBe(1);
 });
@@ -169,10 +180,14 @@ test('Stalker lazy Ministra paginates seasons/files and plays a scoped episode',
     await addSource(page, 'stalker', { mac: '00:1a:79:00:00:0b' });
     await nav(page, 'Movies');
     await page.locator('.poster-card').first().click();
+    await page.getByLabel('Season', { exact: true }).click();
     await expect(
-        page.getByLabel('Season', { exact: true }).locator('option')
+        page
+            .getByRole('dialog', { name: 'Season', exact: true })
+            .getByRole('option')
     ).toHaveCount(3);
-    await page.getByLabel('Season', { exact: true }).selectOption('2');
+    await page.keyboard.press('Escape');
+    await chooseTv(page, 'Season', '2');
     await expect(page.locator('.episode')).toHaveCount(3);
     await page.locator('.episode').nth(1).click();
     await expect

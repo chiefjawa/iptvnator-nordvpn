@@ -1,4 +1,4 @@
-import { Location, NgTemplateOutlet, SlicePipe } from '@angular/common';
+import { NgTemplateOutlet, SlicePipe } from '@angular/common';
 import {
     ChangeDetectionStrategy,
     Component,
@@ -39,8 +39,13 @@ import {
     type PlaybackFallbackRequest,
     PortalInlinePlayerComponent,
 } from '@iptvnator/ui/playback';
-import { DownloadsService, SettingsStore } from '@iptvnator/services';
 import {
+    DownloadsService,
+    SettingsStore,
+    type TmdbMatchContext,
+} from '@iptvnator/services';
+import {
+    getXtreamVodInfo,
     normalizeXtreamVod,
     TmdbEnrichedCastMember,
     XtreamVodDetails,
@@ -97,7 +102,6 @@ import { VodMultiSourceHostService } from './vod-multi-source-host.service';
     ],
 })
 export class VodDetailsRouteComponent implements OnInit, OnDestroy {
-    private readonly location = inject(Location);
     private readonly settingsStore = inject(SettingsStore);
     private readonly route = inject(ActivatedRoute);
     private readonly navigation = injectXtreamDetailNavigation('movie');
@@ -141,6 +145,21 @@ export class VodDetailsRouteComponent implements OnInit, OnDestroy {
     readonly selectedCatalogItem = this.selection.selectedCatalogItem;
     private readonly multiSourceMovie = this.selection.multiSourceMovie;
     readonly selectedVodInfo = this.selection.selectedVodInfo;
+    readonly tmdbMatch = computed<TmdbMatchContext | null>(() => {
+        const playlistId = this.xtreamStore.currentPlaylist()?.id;
+        const info = getXtreamVodInfo(this.selectedItem());
+        if (!playlistId || !this.selectedItem() || !info) return null;
+        return {
+            identity: {
+                provider: 'xtream',
+                playlistId,
+                mediaType: 'movie',
+                itemId: String(this.selectedVodId()),
+            },
+            title: info.name,
+            tmdbId: Number(info.tmdb_id) || null,
+        };
+    });
     readonly playableVodItem = this.selection.playableVodItem;
     readonly fallbackView = this.selection.fallbackView;
     readonly isLoadingDetails = this.xtreamStore.isLoadingDetails;
@@ -546,7 +565,7 @@ export class VodDetailsRouteComponent implements OnInit, OnDestroy {
 
     goBack(): void {
         this.playback.closeInlinePlayer();
-        this.location.back();
+        this.navigation.back();
     }
 
     closeInlinePlayer(): void {

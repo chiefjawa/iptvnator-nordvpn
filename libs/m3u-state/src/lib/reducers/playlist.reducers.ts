@@ -1,5 +1,5 @@
 import { on } from '@ngrx/store';
-import { Channel, Playlist } from '@iptvnator/shared/interfaces';
+import { Channel, Playlist, PlaylistMeta } from '@iptvnator/shared/interfaces';
 import {
     resolvePlaylistEpgSourceState,
     playlistRefreshMatchesSource,
@@ -8,6 +8,15 @@ import {
 import { PlaylistActions } from '../actions';
 import { playlistsAdapter } from '../playlists.state';
 import { PlaylistState } from '../state';
+
+/** Keep channel payloads out of the long-lived playlist metadata map. */
+function toEntityMeta(playlist: PlaylistMeta): PlaylistMeta {
+    const meta: PlaylistMeta & Partial<Playlist> = { ...playlist };
+    delete meta.playlist;
+    delete meta.items;
+    delete meta.header;
+    return meta;
+}
 
 export const playlistReducers = [
     on(PlaylistActions.loadPlaylists, (state): PlaylistState => ({
@@ -28,15 +37,7 @@ export const playlistReducers = [
             playlists: (action.authoritative
                 ? playlistsAdapter.setAll
                 : playlistsAdapter.addMany)(
-                action.authoritative
-                    ? action.playlists.map((playlist) => ({
-                          ...playlist,
-                          playlist: (
-                              state.playlists.entities[playlist._id] as
-                                  Playlist | undefined
-                          )?.playlist,
-                      }))
-                    : action.playlists,
+                action.playlists.map(toEntityMeta),
                 {
                     ...state.playlists,
                     ...(action.authoritative &&
@@ -84,7 +85,10 @@ export const playlistReducers = [
                 !playlistRefreshMatchesSource(currentPlaylist, action.playlist)
             )
                 return state;
+            const autoImportEpg =
+                currentPlaylist?.autoImportEpg ?? action.playlist.autoImportEpg;
             const epgSourceState = resolvePlaylistEpgSourceState({
+                autoImportEpg,
                 detectedEpgUrls:
                     action.playlist.detectedEpgUrls ??
                     currentPlaylist?.detectedEpgUrls,
@@ -105,32 +109,35 @@ export const playlistReducers = [
                 channelsLoading: isActivePlaylist
                     ? false
                     : state.channelsLoading,
-                playlists: playlistsAdapter.updateOne(
-                    {
-                        id: action.playlistId,
-                        changes: {
-                            ...action.playlist,
-                            _id: action.playlistId,
-                            updateDate: Date.now(),
-                            count: action.playlist.playlist.items.length,
-                            userAgent:
-                                action.playlist.userAgent ??
-                                currentPlaylist?.userAgent,
-                            ...(refresh
-                                ? retainPlaylistRefreshSource(currentPlaylist)
-                                : {}),
-                            favorites: currentPlaylist?.favorites ?? [],
-                            epgUrls: epgSourceState.epgUrls,
-                            detectedEpgUrls: epgSourceState.detectedEpgUrls,
-                            manualEpgUrls: epgSourceState.manualEpgUrls,
-                            disabledEpgUrls: epgSourceState.disabledEpgUrls,
-                            autoRefresh:
-                                currentPlaylist?.autoRefresh ??
-                                action.playlist.autoRefresh,
-                        },
-                    },
-                    state.playlists
-                ),
+                playlists: currentPlaylist
+                    ? playlistsAdapter.setOne(
+                          toEntityMeta({
+                              ...currentPlaylist,
+                              ...action.playlist,
+                              ...(autoImportEpg !== undefined
+                                  ? { autoImportEpg }
+                                  : {}),
+                              _id: action.playlistId,
+                              updateDate: Date.now(),
+                              count: action.playlist.playlist.items.length,
+                              userAgent:
+                                  action.playlist.userAgent ??
+                                  currentPlaylist?.userAgent,
+                              ...(refresh
+                                  ? retainPlaylistRefreshSource(currentPlaylist)
+                                  : {}),
+                              favorites: currentPlaylist?.favorites ?? [],
+                              epgUrls: epgSourceState.epgUrls,
+                              detectedEpgUrls: epgSourceState.detectedEpgUrls,
+                              manualEpgUrls: epgSourceState.manualEpgUrls,
+                              disabledEpgUrls: epgSourceState.disabledEpgUrls,
+                              autoRefresh:
+                                  currentPlaylist?.autoRefresh ??
+                                  action.playlist.autoRefresh,
+                          }),
+                          state.playlists
+                      )
+                    : state.playlists,
             };
         }
     ),
@@ -138,7 +145,7 @@ export const playlistReducers = [
         return {
             ...state,
             playlists: playlistsAdapter.addOne(
-                action.playlist,
+                toEntityMeta(action.playlist),
                 state.playlists
             ),
         };
@@ -147,7 +154,7 @@ export const playlistReducers = [
         return {
             ...state,
             playlists: playlistsAdapter.addMany(
-                action.playlists,
+                action.playlists.map(toEntityMeta),
                 state.playlists
             ),
         };
@@ -192,8 +199,16 @@ export const playlistReducers = [
                             ? { referrer: p.referrer }
                             : {}),
                         ...(p.origin !== undefined ? { origin: p.origin } : {}),
+                        // An M3U source edited in the details dialog (#1677).
+                        ...(p.url != null ? { url: p.url } : {}),
+                        ...(p.filePath != null
+                            ? { filePath: p.filePath }
+                            : {}),
                         ...(p.serverUrl != null
                             ? { serverUrl: p.serverUrl }
+                            : {}),
+                        ...(p.xtreamContentTypes !== undefined
+                            ? { xtreamContentTypes: p.xtreamContentTypes }
                             : {}),
                         ...(p.username != null ? { username: p.username } : {}),
                         ...(p.password != null ? { password: p.password } : {}),
@@ -276,7 +291,7 @@ export const playlistReducers = [
                 action.playlists.map((updatedPlaylist) => ({
                     id: updatedPlaylist._id,
                     changes: {
-                        ...updatedPlaylist,
+                        ...toEntityMeta(updatedPlaylist),
                         updateDate: Date.now(),
                     },
                 })),
@@ -307,7 +322,7 @@ export const playlistReducers = [
                 return {
                     ...state,
                     playlists: playlistsAdapter.addOne(
-                        action.playlist,
+                        toEntityMeta(action.playlist),
                         state.playlists
                     ),
                 };

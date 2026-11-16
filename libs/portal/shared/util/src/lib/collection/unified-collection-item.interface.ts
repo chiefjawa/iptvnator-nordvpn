@@ -45,6 +45,9 @@ export interface UnifiedCollectionItem {
     /** Stable live-source EPG lookup key */
     tvgId?: string;
 
+    /** Xtream's XMLTV channel id, distinct from its numerical stream id. */
+    epgChannelId?: string | null;
+
     /** M3U playlist channel id used to rehydrate the full channel object */
     channelId?: string;
 
@@ -62,6 +65,8 @@ export interface UnifiedCollectionItem {
     /** Durable favorite identity, usable even after its catalog row is gone. */
     favoriteId?: number;
     catalogStatus?: XtreamFavoriteCatalogStatus;
+    /** Catalog loading is disabled; saved playback remains permitted. */
+    catalogDisabled?: boolean;
     /** Identity of this saved row, even when a provider reuses its typed ID. */
     xtreamIdentity?: Pick<ContentMetadataPatch, 'tmdbId' | 'releaseYear'>;
 

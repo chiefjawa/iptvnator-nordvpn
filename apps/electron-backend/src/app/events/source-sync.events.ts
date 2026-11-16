@@ -14,21 +14,28 @@ import {
     SOURCE_SYNC_CONNECTION,
     SOURCE_SYNC_CONFIGURE,
     SOURCE_SYNC_DISCONNECT,
+    SOURCE_SYNC_FORGET,
+    SOURCE_SYNC_SAVED_CONNECTION,
     SOURCE_SYNC_REQUEST,
     SOURCE_SYNC_RESUME,
 } from '@iptvnator/shared/interfaces/ipc-commands';
 import {
     readSourceServerConfig,
+    readSavedSourceServerConfig,
     saveSourceServerConfig,
     clearSourceServerConfig,
+    disconnectSourceServerConfig,
     sourceServerToken,
 } from '../services/source-server-config';
+import { getHostedServerAccessCode } from '../services/hosted-server-session';
 import { requestWithValidatedRedirects } from '../util/validated-axios';
 import { SourceServerTransport } from './source-server-transport';
 
 function route(request: SourceServerRequest): { path: string; method: string } {
     const id = encodeURIComponent(request.id ?? '');
     switch (request.operation) {
+        case 'tmdb-transfer':
+            return { path: '/v1/tmdb-transfer', method: 'POST' };
         case 'instance':
             return { path: '/v1/instance', method: 'GET' };
         case 'list':
@@ -43,6 +50,32 @@ function route(request: SourceServerRequest): { path: string; method: string } {
             return { path: `/v1/sources/${id}`, method: 'DELETE' };
         case 'clear':
             return { path: '/v1/sources', method: 'DELETE' };
+        case 'history-read':
+            return { path: `/v1/history/sources/${id}`, method: 'GET' };
+        case 'history-apply':
+            return { path: '/v1/history/operations', method: 'POST' };
+        case 'favorites-context':
+            return { path: `/v1/favorites/sources/${id}`, method: 'GET' };
+        case 'favorites-list':
+            return {
+                path: `/v1/favorites/sources/${id}/items${request.cursor ? '?cursor=' + encodeURIComponent(request.cursor) : ''}`,
+                method: 'GET',
+            };
+        case 'favorites-read':
+            return { path: '/v1/favorites/read', method: 'POST' };
+        case 'favorites-apply':
+            return { path: '/v1/favorites/operations', method: 'POST' };
+        case 'activity-context':
+            return { path: `/v1/activity/sources/${id}`, method: 'GET' };
+        case 'activity-list':
+            return {
+                path: `/v1/activity/sources/${id}/items${request.cursor ? '?cursor=' + encodeURIComponent(request.cursor) : ''}`,
+                method: 'GET',
+            };
+        case 'activity-read':
+            return { path: '/v1/activity/read', method: 'POST' };
+        case 'activity-apply':
+            return { path: '/v1/activity/operations', method: 'POST' };
         default:
             throw new Error('Invalid source operation');
     }
@@ -56,6 +89,13 @@ export async function sourceServerRequest(
 ): Promise<SourceServerResponse> {
     const target = route(request);
     if (request.source) validateSource(request.source);
+    const body =
+        request.operation === 'tmdb-transfer'
+            ? request.tmdbTransfer?.request
+            : (request.history ??
+              request.favorite ??
+              request.activity ??
+              request.source);
     try {
         const response = await requestWithValidatedRedirects(
             `${apiUrl}${target.path}`,
@@ -74,9 +114,7 @@ export async function sourceServerRequest(
                     ...(token && request.operation !== 'instance'
                         ? { Authorization: `Bearer ${token}` }
                         : {}),
-                    ...(request.source
-                        ? { 'Content-Type': 'application/json' }
-                        : {}),
+                    ...(body ? { 'Content-Type': 'application/json' } : {}),
                     ...(request.operation === 'create'
                         ? { 'If-None-Match': '*' }
                         : {}),
@@ -88,7 +126,7 @@ export async function sourceServerRequest(
                           }
                         : {}),
                 },
-                data: request.source,
+                data: body,
             },
             {
                 allowPrivateNetworks: true,
@@ -108,7 +146,9 @@ export async function sourceServerRequest(
     }
 }
 
-export function registerSourceSyncEvents(prepareRestart: () => void): void {
+export function registerSourceSyncEvents(
+    prepareRestart: () => void | Promise<void>
+): void {
     const transport = new SourceServerTransport(sourceServerRequest);
     powerMonitor.on('resume', () => {
         for (const window of BrowserWindow.getAllWindows())
@@ -124,11 +164,31 @@ export function registerSourceSyncEvents(prepareRestart: () => void): void {
             event.returnValue = { error: 'SOURCE_SYNC.INCOMPATIBLE' };
         }
     });
+    ipcMain.on(SOURCE_SYNC_SAVED_CONNECTION, (event) => {
+        const saved = readSavedSourceServerConfig();
+        event.returnValue = saved
+            ? {
+                  apiUrl: saved.apiUrl,
+                  instanceId: saved.instanceId,
+                  hasToken: Boolean(
+                      saved.encryptedToken || getHostedServerAccessCode(saved)
+                  ),
+              }
+            : null;
+    });
     ipcMain.handle(
         SOURCE_SYNC_REQUEST,
         async (_event, request: SourceServerRequest) => {
             const config = readSourceServerConfig();
             if (!config) throw new Error('SOURCE_SYNC.OFFLINE');
+            if (request.operation === 'tmdb-transfer') {
+                const expected = request.tmdbTransfer?.connection;
+                if (
+                    expected?.apiUrl !== config.apiUrl ||
+                    expected.instanceId !== config.instanceId
+                )
+                    return { status: 409, body: { code: 'instance_changed' } };
+            }
             return transport.execute(config, request, () =>
                 sourceServerToken(config)
             );
@@ -136,22 +196,35 @@ export function registerSourceSyncEvents(prepareRestart: () => void): void {
     );
     ipcMain.handle(
         SOURCE_SYNC_CONFIGURE,
-        async (_event, url: string, token: string, restart: boolean) => {
+        async (
+            _event,
+            url: string,
+            token: string,
+            restart: boolean,
+            savedInstanceId?: string
+        ) => {
             let configured: ReturnType<typeof readSourceServerConfig> = null;
             try {
                 configured = readSourceServerConfig();
             } catch {
                 if (!restart) throw new Error('SOURCE_SYNC.INCOMPATIBLE');
             }
+            const saved =
+                !configured && restart ? readSavedSourceServerConfig() : null;
+            const input = url.replace(/\/$/, '');
             const apiUrl =
-                configured?.apiUrl === url.replace(/\/$/, '')
-                    ? configured.apiUrl
+                configured?.apiUrl === input || saved?.apiUrl === input
+                    ? input
                     : normalizeSourceServerUrl(url);
             if (typeof token !== 'string' || token.length > 8192)
                 throw new Error('Invalid access token');
             const probe = await sourceServerRequest(apiUrl, token, {
                 operation: 'instance',
             });
+            if ([401, 403].includes(probe.status))
+                throw new Error('SOURCE_SYNC.LOCKED');
+            if (probe.status >= 500)
+                throw new Error('SOURCE_SYNC.CONNECTION_FAILED');
             const instance = probe.body as ServerInstanceInfo;
             if (
                 probe.status !== 200 ||
@@ -171,6 +244,16 @@ export function registerSourceSyncEvents(prepareRestart: () => void): void {
             ) {
                 throw new Error('SOURCE_SYNC.INSTANCE_CHANGED');
             }
+            if (savedInstanceId !== undefined) {
+                if (
+                    !saved ||
+                    saved.apiUrl !== apiUrl ||
+                    saved.instanceId !== savedInstanceId ||
+                    instance.instanceId !== savedInstanceId
+                )
+                    throw new Error('SOURCE_SYNC.SAVED_INSTANCE_CHANGED');
+                token = sourceServerToken(saved);
+            }
             const check = await sourceServerRequest(
                 apiUrl,
                 token,
@@ -183,14 +266,27 @@ export function registerSourceSyncEvents(prepareRestart: () => void): void {
                         ? 'SOURCE_SYNC.LOCKED'
                         : 'SOURCE_SYNC.REQUEST_FAILED'
                 );
+            if (saved && savedInstanceId !== undefined) {
+                const latest = readSavedSourceServerConfig();
+                if (
+                    latest?.apiUrl !== saved.apiUrl ||
+                    latest.instanceId !== saved.instanceId ||
+                    latest.encryptedToken !== saved.encryptedToken
+                )
+                    throw new Error('SOURCE_SYNC.SAVED_INSTANCE_CHANGED');
+            }
             const persisted = saveSourceServerConfig(
                 { apiUrl, instanceId: instance.instanceId },
                 token
             );
-            if (restart) {
+            const needsRestart =
+                !configured ||
+                configured.apiUrl !== apiUrl ||
+                configured.instanceId !== instance.instanceId;
+            if (restart && needsRestart) {
                 // app.exit() skips will-quit, where ordinary quits tear down
                 // managed players and the database worker.
-                prepareRestart();
+                await prepareRestart();
                 requestAppRelaunch();
                 app.exit();
             }
@@ -201,10 +297,13 @@ export function registerSourceSyncEvents(prepareRestart: () => void): void {
             };
         }
     );
-    ipcMain.handle(SOURCE_SYNC_DISCONNECT, () => {
-        clearSourceServerConfig();
-        prepareRestart();
+    ipcMain.handle(SOURCE_SYNC_DISCONNECT, async () => {
+        disconnectSourceServerConfig();
+        await prepareRestart();
         requestAppRelaunch();
         app.exit();
+    });
+    ipcMain.handle(SOURCE_SYNC_FORGET, () => {
+        if (readSavedSourceServerConfig()) clearSourceServerConfig();
     });
 }
