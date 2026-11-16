@@ -500,6 +500,14 @@
         row-gap: 0;
     }
 
+    // On its own line it can still be wider than the text column (duration
+    // and air date in a ~290px pane): end it, do not cut it at the pane edge.
+    .episode-item__meta {
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
     .episode-item__description {
         -webkit-line-clamp: 1;
         line-clamp: 1;

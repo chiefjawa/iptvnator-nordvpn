@@ -30,7 +30,10 @@
         border-right: 1px solid var(--app-separator);
         display: flex;
         flex-direction: column;
-        flex-shrink: 0;
+        // Yields toward its min-width when the window cannot fit the stored
+        // width beside the player (see .content-container); the resizable
+        // directive measures the rendered width, so dragging still works.
+        flex-shrink: 1;
         overflow: hidden;
         position: relative;
         container-type: inline-size;
@@ -71,6 +74,10 @@
     // ─── Main content column ─────────────────────────────────────────────────
     .content-container {
         flex: 1;
+        // Before the sidebar gives up any width the player keeps up to 320px;
+        // with the sidebar at its own floor the player takes what is left.
+        // Without this a 400px sidebar left an 860px window's player 77px.
+        min-width: min(320px, calc(100% - 250px));
         display: flex;
         flex-direction: column;
         overflow: hidden;

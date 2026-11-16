@@ -20,6 +20,7 @@
     flex-direction: column;
     height: 100%;
     min-height: 0;
+    container: epg-timeline / inline-size;
 }
 
 /* ── toolbar (single header bar) ── */
@@ -409,5 +410,24 @@
     }
     .epg-timeline__block {
         transition: none;
+    }
+}
+
+/* A narrow player column (live sidebar beside the category rail) cannot hold
+   the heading and ~390px of fixed controls on one line: the controls ran
+   past the column and were cut off. The heading takes its own line and the
+   controls wrap after it. Collapsed, the bar holds only shrinkable summary
+   text in a fixed 56px dock, so it stays one line. Last in the file so it
+   beats the base rules. */
+@container epg-timeline (max-width: 519px) {
+    .epg-timeline:not(.epg-timeline--collapsed) {
+        .epg-timeline__toolbar {
+            flex-wrap: wrap;
+            row-gap: 8px;
+        }
+
+        .epg-timeline__collapse {
+            flex-basis: 100%;
+        }
     }
 }
