@@ -2,6 +2,7 @@ import { Injectable, inject } from '@angular/core';
 import {
     EpgQueueService,
     XtreamCredentials,
+    xtreamCategoryNameOf,
 } from '@iptvnator/portal/xtream/data-access';
 import { createLogger } from '@iptvnator/portal/shared/util';
 
@@ -45,14 +46,19 @@ export function epgQueueEntryFor(
         epg_channel_id?: string | null;
         title?: string | null;
         name?: string | null;
+        category_id?: string | number | null;
     },
-    playlistId: string | null | undefined
+    playlistId: string | null | undefined,
+    categoryNames?: ReadonlyMap<string, string>
 ) {
     return {
         streamId: channel.xtream_id,
         epgChannelId: channel.epg_channel_id ?? null,
         playlistId: playlistId ?? null,
         channelName: channel.title || channel.name || null,
+        categoryName: categoryNames
+            ? xtreamCategoryNameOf(categoryNames, channel.category_id)
+            : null,
     };
 }
 

@@ -1,5 +1,8 @@
 import { TestBed } from '@angular/core/testing';
-import { EpgQueueService } from '@iptvnator/portal/xtream/data-access';
+import {
+    EpgQueueService,
+    xtreamCategoryNames,
+} from '@iptvnator/portal/xtream/data-access';
 import {
     EPG_REFRESH_INTERVAL_MS,
     EpgRefreshContribution,
@@ -160,10 +163,30 @@ describe('EpgRefreshCoordinator', () => {
             epgChannelId: null,
             playlistId: 'playlist-1',
             channelName: 'Synthetic Title',
+            categoryName: null,
         });
         expect(
             epgQueueEntryFor({ xtream_id: 6, name: 'Raw Name' }, null)
                 .channelName
         ).toBe('Raw Name');
+    });
+
+    it('hands the queue the category name as the country hint', () => {
+        const names = xtreamCategoryNames([
+            { category_id: '12', category_name: 'XY| SAMPLE' },
+            { id: 34, name: 'ZZ| STORED' },
+        ]);
+        expect(
+            epgQueueEntryFor({ xtream_id: 5, category_id: '12' }, 'p', names)
+                .categoryName
+        ).toBe('XY| SAMPLE');
+        expect(
+            epgQueueEntryFor({ xtream_id: 6, category_id: 34 }, 'p', names)
+                .categoryName
+        ).toBe('ZZ| STORED');
+        expect(
+            epgQueueEntryFor({ xtream_id: 7, category_id: 99 }, 'p', names)
+                .categoryName
+        ).toBeNull();
     });
 });

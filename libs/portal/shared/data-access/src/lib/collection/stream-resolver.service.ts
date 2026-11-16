@@ -32,6 +32,7 @@ import {
 import {
     XtreamApiService,
     XtreamUrlService,
+    XtreamXmltvFallbackService,
 } from '@iptvnator/portal/xtream/data-access';
 import {
     buildStalkerExternalPlaybackHeaders,
@@ -780,8 +781,9 @@ export class StreamResolverService {
 
             // 2) Fall back to the manual mapping table (playlist-scoped
             // Xtream key → epgChannelId).
+            let mapping: { epgChannelId?: string } | null = null;
             if (this.supportsProgramLookup && item.xtreamId) {
-                const mapping = await this.epgBridge
+                mapping = await this.epgBridge
                     .getEpgMapping(
                         buildXtreamEpgMappingKey(item.playlistId, item.xtreamId)
                     )
@@ -796,7 +798,14 @@ export class StreamResolverService {
                 }
             }
 
-            // 3) Try the full EPG endpoint (same as the main live-view
+            // 3) Without either, the XMLTV channel matched by name, before
+            // the provider: such providers have nothing for the channel.
+            if (!epgKey && !mapping?.epgChannelId) {
+                const named = await this.findProgramsByName(item);
+                if (named.length > 0) return this.mapProgramsToEpgItems(named);
+            }
+
+            // 4) Try the full EPG endpoint (same as the main live-view
             // loadEpg() in with-epg.feature.ts) — many providers only
             // support get_simple_data_table, not get_short_epg.
             try {
@@ -1063,6 +1072,7 @@ export class StreamResolverService {
                     // order matches how mappings can be saved: the
                     // playlist-scoped Xtream key (portal/favorites dialogs),
                     // then tvgId and name (M3U dialogs).
+                    let mapped = false;
                     if (!currentItem && this.supportsProgramLookup) {
                         for (const key of this.mappingCandidateKeys(
                             playlistId,
@@ -1070,12 +1080,24 @@ export class StreamResolverService {
                         )) {
                             const mappedId = mappingByKey.get(key);
                             if (!mappedId) continue;
+                            mapped = true;
                             currentItem = await this.findCurrentInXmltv(
                                 mappedId,
                                 nowSeconds
                             );
                             if (currentItem) break;
                         }
+                    }
+
+                    // 3) Without either, the XMLTV channel matched by name,
+                    // before the provider (`XtreamXmltvFallbackService`).
+                    if (!currentItem && !epgChannelKey && !mapped) {
+                        currentItem = this.findCurrentItem(
+                            this.mapProgramsToEpgItems(
+                                await this.findProgramsByName(channel)
+                            ),
+                            nowSeconds
+                        );
                     }
 
                     if (!currentItem) {
@@ -1567,7 +1589,16 @@ export class StreamResolverService {
             .getChannelPrograms(epgChannelId)
             .catch(() => null);
         if (!programs || programs.length === 0) return null;
-        const items = this.mapProgramsToEpgItems(programs);
+        return this.findCurrentItem(
+            this.mapProgramsToEpgItems(programs),
+            nowSeconds
+        );
+    }
+
+    private findCurrentItem(
+        items: EpgItem[],
+        nowSeconds: number
+    ): EpgItem | null {
         return (
             items.find(
                 (item) =>
@@ -1575,6 +1606,31 @@ export class StreamResolverService {
                     nowSeconds < Number(item.stop_timestamp)
             ) ?? null
         );
+    }
+
+    /**
+     * The XMLTV schedule of the guide channel matched by the item's name
+     * (first candidate with programmes), for an Xtream channel without
+     * `epg_channel_id` and manual mapping; placeholder matches are skipped.
+     * The collection has no category name, so only the name's own country
+     * prefix narrows the match.
+     */
+    private async findProgramsByName(
+        item: Pick<UnifiedCollectionItem, 'name'>
+    ): Promise<EpgProgram[]> {
+        if (!this.supportsProgramLookup || !item.name?.trim()) return [];
+        const match = await this.injector
+            .get(XtreamXmltvFallbackService)
+            .matchChannelByName(item.name)
+            .catch(() => null);
+        if (!match || match.tier === 'placeholder') return [];
+        for (const id of match.ids) {
+            const programs = await this.epgBridge
+                .getChannelPrograms(id)
+                .catch(() => null);
+            if (programs && programs.length > 0) return programs;
+        }
+        return [];
     }
 }
 

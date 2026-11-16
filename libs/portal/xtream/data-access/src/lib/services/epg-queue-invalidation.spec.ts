@@ -45,6 +45,7 @@ describe('EpgQueueService invalidation', () => {
                         getCurrentProgramsBatch: jest
                             .fn()
                             .mockResolvedValue({}),
+                        nameIndexKey: jest.fn(() => 'index'),
                     },
                 },
                 {

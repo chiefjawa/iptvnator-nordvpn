@@ -24,10 +24,13 @@ export class XtreamFullEpgService {
         epgChannelId: string | null,
         {
             channelName,
+            categoryName,
             ...options
         }: Pick<XtreamRequestOptions, 'signal' | 'sessionId'> & {
             /** Playlist channel name for the automatic XMLTV name match. */
             channelName?: string | null;
+            /** Its playlist category name, a country hint for that match. */
+            categoryName?: string | null;
         } = {}
     ): Promise<EpgItem[]> {
         options.signal?.throwIfAborted();
@@ -52,6 +55,7 @@ export class XtreamFullEpgService {
             preferUploaded,
             signal: options.signal,
             channelName,
+            categoryName,
             mapped,
             fetchProvider: () =>
                 this.api.getFullEpg(credentials, streamId, {

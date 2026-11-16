@@ -49,6 +49,8 @@ describe('XtreamFullEpgService', () => {
                         resolveCurrentEpg:
                             XtreamXmltvFallbackService.prototype
                                 .resolveCurrentEpg,
+                        readMatched:
+                            XtreamXmltvFallbackService.prototype['readMatched'],
                     },
                 },
             ],

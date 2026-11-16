@@ -18,6 +18,11 @@ import {
     XtreamApiService,
     XtreamCredentials,
 } from '../../services/xtream-api.service';
+import {
+    XtreamCategoryNameSource,
+    xtreamCategoryNameOf,
+    xtreamCategoryNames,
+} from '../../services/xtream-category-name.util';
 import { XtreamFullEpgService } from '../../services/xtream-full-epg.service';
 import { XtreamXmltvFallbackService } from '../../services/xtream-xmltv-fallback.service';
 import { createLogger } from '@iptvnator/portal/shared/util/logger';
@@ -86,7 +91,9 @@ export function withEpg() {
             epg_channel_id?: string | null;
             title?: string | null;
             name?: string | null;
+            category_id?: string | number | null;
         } | null;
+        liveCategories?: () => ReadonlyArray<XtreamCategoryNameSource>;
     };
 
     return signalStoreFeature(
@@ -214,6 +221,12 @@ export function withEpg() {
                                     channelName:
                                         selectedItem?.title ||
                                         selectedItem?.name,
+                                    categoryName: xtreamCategoryNameOf(
+                                        xtreamCategoryNames(
+                                            storeAny.liveCategories?.()
+                                        ),
+                                        selectedItem?.category_id
+                                    ),
                                 }
                             ));
 

@@ -11,6 +11,7 @@ describe('EpgQueueService', () => {
     let fallback: {
         getProgramsForChannel: jest.Mock;
         getCurrentProgramsBatch: jest.Mock;
+        nameIndexKey: jest.Mock;
     };
     let settings: {
         preferUploadedEpgOverXtream: jest.Mock;
@@ -43,6 +44,7 @@ describe('EpgQueueService', () => {
         fallback = {
             getProgramsForChannel: jest.fn().mockResolvedValue([]),
             getCurrentProgramsBatch: jest.fn().mockResolvedValue({}),
+            nameIndexKey: jest.fn(() => 'index'),
         };
         settings = {
             preferUploadedEpgOverXtream: jest.fn(() => false),

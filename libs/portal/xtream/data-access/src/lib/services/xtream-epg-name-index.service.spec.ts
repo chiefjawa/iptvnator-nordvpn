@@ -4,7 +4,10 @@ import {
     EpgSourceSettingsService,
 } from '@iptvnator/services';
 import type { ElectronBridgeEpgProgress } from '@iptvnator/shared/interfaces';
-import { XtreamEpgNameIndexService } from './xtream-epg-name-index.service';
+import {
+    EPG_NAME_INDEX_UNAVAILABLE,
+    XtreamEpgNameIndexService,
+} from './xtream-epg-name-index.service';
 
 describe('XtreamEpgNameIndexService', () => {
     const original = window.electron;
@@ -116,5 +119,43 @@ describe('XtreamEpgNameIndexService', () => {
         });
         await TestBed.inject(EpgPreferencesService).apply(true);
         await expect(service.load()).resolves.toBeNull();
+    });
+
+    describe('readyKey', () => {
+        it('is null until the index is built, then names it', async () => {
+            const service = TestBed.inject(XtreamEpgNameIndexService);
+            expect(service.readyKey()).toBeNull();
+
+            const pending = service.load();
+            expect(service.readyKey()).toBeNull();
+            await pending;
+            const built = service.readyKey();
+            expect(built).toEqual(expect.any(String));
+            expect(built).not.toBe(EPG_NAME_INDEX_UNAVAILABLE);
+
+            // A revision makes the built index stale until it is rebuilt.
+            TestBed.inject(EpgSourceSettingsService).revision.update(
+                (revision) => revision + 1
+            );
+            expect(service.readyKey()).toBeNull();
+            await service.load();
+            expect(service.readyKey()).not.toBe(built);
+        });
+
+        it('is unavailable after a failed build and without a bridge', async () => {
+            const service = TestBed.inject(XtreamEpgNameIndexService);
+            getEpgChannels.mockRejectedValueOnce(new Error('db busy'));
+            await service.load();
+            expect(service.readyKey()).toBe(EPG_NAME_INDEX_UNAVAILABLE);
+
+            await service.load();
+            expect(service.readyKey()).not.toBe(EPG_NAME_INDEX_UNAVAILABLE);
+
+            Object.defineProperty(window, 'electron', {
+                configurable: true,
+                value: {},
+            });
+            expect(service.readyKey()).toBe(EPG_NAME_INDEX_UNAVAILABLE);
+        });
     });
 });

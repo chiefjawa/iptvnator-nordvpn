@@ -1036,39 +1036,98 @@ It gates `archivePlaybackAvailable` (Live TV) and `timelineArchiveAvailable`
 
 ### XMLTV name match
 
-Many providers send no `epg_channel_id`. When a live channel has no manual
-mapping and neither its `epg_channel_id` in XMLTV nor the provider has a
-programme, the channel name is matched against the stored XMLTV channels'
-display names (`epg-name-match.util.ts`). This applies to the row previews
-(`EpgQueueService`) and, through `XtreamFullEpgService` and
-`XtreamXmltvFallbackService.resolveCurrentEpg`, to the live EPG panel and the
-multi-channel guide. Collection and dashboard previews
-(`StreamResolverService`) do not use it. Precedence, under either
-`preferUploadedEpgOverXtream` setting: manual mapping, then the
-`epg_channel_id` XMLTV and the provider in the configured order, then the name
-match. A manually mapped channel is never name-matched. A failed provider read
-falls back to the name match in the panel and guide; the row queue keeps its
-failure cooldown, as for the `epg_channel_id` fallback.
+Many providers send no `epg_channel_id`, and their per-stream EPG API returns
+nothing for those channels either. Such a channel is matched by name against
+the stored XMLTV channels (`epg-name-match.util.ts`, names analysed by
+`epg-name-tokens.util.ts`, country hints in `epg-name-country.util.ts`).
 
-Both names are NFKC-normalized (superscript `ᴿᴬᵂ` becomes `raw`), lower-cased
-and whitespace-collapsed. An exact match against a real XMLTV id wins.
-Otherwise a loose key drops a leading one- or two-token prefix followed by
-`:`, `|`, a bar glyph or ` - ` (`US: `, `XY&Z: `, `UK ▎ `), surrounding `##`
-decorations, quality tags as whole words (`RAW`, `SD`, `HD`, `FHD`, `UHD`,
-`4K`, `8K`, `HEVC`, `H.265`, `50FPS`, `1080p`, `VIP`, `LQ`, `HQ`, `BACKUP` and
-similar) and punctuation; the key needs three characters. Placeholder channels
-(`dummy-<n>`, filler programmes) never loose-match and win only on an exact
-name without a real candidate. Several XMLTV channels with one key resolve to
-the lowest id, so the choice is stable; a manual mapping overrides it. The
-matched id goes through the ordinary XMLTV-by-id reads, so the display offset
-applies identically.
+Resolution order, per view:
+
+- Row previews (`EpgQueueService`): a manual mapping wins and is never
+  name-matched. For a channel without mapping and `epg_channel_id`, the
+  name-matched ids join the viewport's one current-programme batch IPC; the
+  first candidate with a programme is recorded at once — even when a newer
+  enqueue (fast scroll) superseded this one — and no provider request is made.
+  Only channels with no XMLTV hit at all go to the provider queue, after the
+  channels with an `epg_channel_id`, so they cannot starve the viewport. A
+  channel with an `epg_channel_id` keeps its order under
+  `preferUploadedEpgOverXtream` (provider and its XMLTV id in the configured
+  order); the name match is its last resort.
+- Live EPG panel and multi-channel guide (`XtreamFullEpgService` →
+  `XtreamXmltvFallbackService.resolveCurrentEpg`): the same order with full
+  schedules — name-matched schedule first for a channel without mapping and
+  `epg_channel_id`, the provider only when that is empty; last resort
+  otherwise. A failed provider read falls back to the name match.
+- Collection, favourites and dashboard previews and the collection detail
+  schedule (`StreamResolverService`): after the `epg_channel_id` XMLTV and the
+  manual mapping, a channel with neither reads the name match before the
+  provider. These rows carry no category, so only the name's own prefix gives
+  a country hint.
+
+A placeholder match (`dummy-<n>`, filler programmes repeating the name) comes
+after the provider everywhere.
+
+Matching. Both names are NFKC-normalized and lower-cased. The playlist name
+loses up to two leading prefixes (`US: `, `XY&Z: `, `VIP: US: `; the second
+only when it is a two-letter code), `##`-style decorations, quality tags
+(`RAW`, `HD`, `4K`, `HEVC`, `60FPS`, `1080p`, `VIP`, `BACKUP`…) and
+punctuation. `+` reads `plus` and `&` reads `and`, number words become digits
+and `Sample11` splits into `sample 11`. Channel words (`the`, `and`, `tv`,
+`channel`, `network`, `television`, `local`, `ch`, `by`) are dropped unless
+nothing with three letters would remain (`TV 1` keeps them and is then a
+generic name). A last `east`/`west`/`pacific`/`mountain`/`central` is a feed:
+an unmarked name is the east feed, other feeds must agree. A name that is
+`#####`-wrapped is a list header and never matches. The tiers, first
+unambiguous one wins:
+
+1. `exact`: the whole normalized name equals a display name.
+2. `name`: the token bag or the squashed form (`SampleView` = `SAMPLE VIEW`)
+   equals a display name's, the id without country suffix and bracketed code
+   (6+ characters), either without a trailing `tv`/`channel`/`network`, the
+   part after a `BRAND - ` display prefix, or the words before `by <brand>`
+   (two or more). `X Network` and `X Channel` never match each other.
+3. `callSign`: a bracketed US/CA call sign (`(KXYZ)`, `(WXYZ-DT)`), or an
+   unbracketed one next to a network name, names a station whose id or name
+   carries it; a different network on either side (a subchannel) rejects it.
+4. `partial`: one token set strictly contains the other, the shorter side has
+   two tokens, numbers agree and the shorter covers at least 60% of the longer
+   name's characters. Only bracketed detail (not two-letter codes such as
+   `(XY)`, a regional feed), a network name, `show` or a missing local station
+   number (`NET 5 City` ↔ `NET City`) may be extra; any other word is a
+   sibling channel. Needs a country hint; a runner-up of another bag within
+   0.15 coverage makes it ambiguous.
+
+Country hint: the category prefix (`US| …`), else the name prefix, maps to
+guide id suffixes (`.us`; `UK`/`GB` → `.uk`; `AR` → Arabic countries, `ARG` →
+`.ar`; `LA`, `EXYU`, `AFR` → regions). A name prefix overrides the category
+when it narrows a region or is spelled out (three or more letters). Only ISO
+3166 codes count; other prefixes (`XY: `, `RK: `, `TV: `) are package tags.
+With a hint, guide channels of the hinted countries rank first, then ids
+without a country; another country only for a two-word name (6+ characters)
+with the very same words whose brand (first word) has no guide channel in the
+hinted countries and at most two guide countries in all — an international
+channel carried abroad. A generic name needs the hinted country. Whenever the
+best candidates span more than one country there is no answer, and an
+ambiguous tier ends the search: a wrong guide is worse than none. Up to three
+same-channel candidates are kept, best first; the row queue and the schedule
+readers take the first with programmes. Matched ids go through the ordinary
+XMLTV-by-id reads, so the display offset applies identically.
 
 `XtreamEpgNameIndexService` builds the index lazily on the first lookup that
-needs it (one `getEpgChannels` IPC, never at startup) and reuses it until the
-EPG source revision changes (settings, reconciliation, the global EPG toggle)
-or an import reports `complete`. Lookups are synchronous map reads. The row
-queue adds name-matched ids to its single current-programme batch IPC per
-viewport.
+needs it (one `getEpgChannels` IPC, never at startup; the row queue starts it
+in parallel with the mapping IPC) and reuses it until the EPG source revision
+changes (settings, reconciliation, the global EPG toggle) or an import reports
+`complete`. The index keeps exact, key and call-sign maps plus an inverted
+token index for `partial`, and memoizes lookups. `readyKey()` names the index
+a lookup would use; the row queue records every empty answer under it, and an
+empty answer recorded before the index was ready, or under an older index, is
+no longer returned by `getCached`, so a name match that became available is
+not hidden for the 5-minute TTL.
+
+The channel list loads the rows on screen whenever its current viewport's
+rendered range or the list itself changes. The viewport is recreated when the
+list leaves the DOM (loading skeleton, empty search), and a new category can
+keep the same index range, which `renderedRangeStream` does not re-emit.
 
 ## User-Agent
 

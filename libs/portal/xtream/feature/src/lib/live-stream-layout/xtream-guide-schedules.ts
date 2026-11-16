@@ -2,7 +2,10 @@ import { inject, Injector, type Signal } from '@angular/core';
 import {
     XtreamApiService,
     XtreamFullEpgService,
+    XtreamStore,
     type XtreamCredentials,
+    xtreamCategoryNameOf,
+    xtreamCategoryNames,
 } from '@iptvnator/portal/xtream/data-access';
 import {
     foldSearchText,
@@ -82,6 +85,10 @@ export function injectXtreamGuideSchedules(
         if (!owner) throw new DOMException('EPG guide closed', 'AbortError');
         const fullEpg = injector.get(XtreamFullEpgService);
         api ??= injector.get(XtreamApiService);
+        // Country hints for the XMLTV name match (`US| …` categories).
+        const categoryNames = xtreamCategoryNames(
+            injector.get(XtreamStore, null)?.liveCategories?.()
+        );
         if (cachedRevision !== current) {
             cachedRevision = current;
             cache.clear();
@@ -106,7 +113,14 @@ export function injectXtreamGuideSchedules(
                         playlist,
                         item.xtream_id,
                         item.epg_channel_id ?? null,
-                        { ...options, channelName: item.title || item.name }
+                        {
+                            ...options,
+                            channelName: item.title || item.name,
+                            categoryName: xtreamCategoryNameOf(
+                                categoryNames,
+                                item.category_id
+                            ),
+                        }
                     );
                     return { items, programs: items.map(toSharedEpgProgram) };
                 },

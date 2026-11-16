@@ -72,6 +72,7 @@ function configureStore(setup: TestStoreSetup) {
         matchChannelByName: jest.fn(async () => null),
         resolveCurrentEpg:
             XtreamXmltvFallbackService.prototype.resolveCurrentEpg,
+        readMatched: XtreamXmltvFallbackService.prototype['readMatched'],
     };
 
     const settingsStore = {

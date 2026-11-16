@@ -22,8 +22,8 @@ jest.mock('@iptvnator/portal/shared/util', () => ({
 /**
  * Real queue, full-EPG resolver, XMLTV fallback and name index against a
  * synthetic Electron EPG bridge: an Xtream channel without `epg_channel_id`
- * whose provider EPG is empty gets its programmes from the XMLTV channel
- * whose display name matches.
+ * gets its programmes from the XMLTV channel whose display name matches,
+ * before — and instead of — the provider.
  */
 describe('Xtream XMLTV name match (integration)', () => {
     const original = window.electron;
@@ -34,6 +34,8 @@ describe('Xtream XMLTV name match (integration)', () => {
         { id: 'dummy-18', displayName: 'Sample Filler' },
         { id: 'sample.id.us', displayName: 'Sample Id Channel' },
         { id: 'sample.mapped', displayName: 'Sample Mapped' },
+        { id: 'samplecinema.us', displayName: 'Sample Cinema' },
+        { id: 'samplecinema.uk', displayName: 'Sample Cinema' },
     ];
     const programmeOf = (channel: string): EpgProgram => ({
         channel,
@@ -155,7 +157,7 @@ describe('Xtream XMLTV name match (integration)', () => {
         );
         await jest.advanceTimersByTimeAsync(1000);
 
-        expect(api.getShortEpg).toHaveBeenCalledTimes(1);
+        expect(api.getShortEpg).not.toHaveBeenCalled();
         expect(bridge.getEpgChannels).toHaveBeenCalledTimes(1);
         expect(bridge.getCurrentProgramsBatch).toHaveBeenCalledTimes(1);
         // Same provider-clock "now" as the epg_channel_id path.
@@ -180,20 +182,20 @@ describe('Xtream XMLTV name match (integration)', () => {
         offsetMinutes = 60;
         const fallback = TestBed.inject(XtreamXmltvFallbackService);
 
-        const id = await fallback.matchChannelByName(channelName);
-        await fallback.getCurrentProgramsBatch([id]);
+        const match = await fallback.matchChannelByName(channelName);
+        await fallback.getCurrentProgramsBatch([match?.ids[0]]);
 
-        expect(id).toBe('sample.news.us');
+        expect(match?.ids).toEqual(['sample.news.us']);
         expect(bridge.getCurrentProgramsBatch).toHaveBeenCalledWith(
             ['sample.news.us'],
             { nowMs: NOW_MS - 60 * 60_000 }
         );
     });
 
-    it('feeds the panel and guide schedule from the name match', async () => {
+    it('feeds the panel and guide schedule from the name match, without the provider', async () => {
         const items = await loadSchedule(null);
 
-        expect(api.getFullEpg).toHaveBeenCalledTimes(1);
+        expect(api.getFullEpg).not.toHaveBeenCalled();
         expect(bridge.getChannelPrograms).toHaveBeenCalledWith(
             'sample.news.us',
             { rejectOnError: true }
@@ -201,6 +203,21 @@ describe('Xtream XMLTV name match (integration)', () => {
         expect(items.map((item) => item.title)).toEqual([
             'sample.news.us programme',
         ]);
+    });
+
+    it('uses the category as the country hint of the name match', async () => {
+        const items = await TestBed.inject(XtreamFullEpgService).load(
+            credentials,
+            1,
+            null,
+            { channelName: 'XY: SAMPLE CINEMA', categoryName: 'UK| MOVIES' }
+        );
+        expect(items[0].channel_id).toBe('samplecinema.uk');
+
+        // Without a hint, one name in two countries is no answer.
+        await expect(loadSchedule(null, 'XY: SAMPLE CINEMA')).resolves.toEqual(
+            []
+        );
     });
 
     it('keeps the manual mapping ahead of the name match', async () => {
@@ -223,20 +240,33 @@ describe('Xtream XMLTV name match (integration)', () => {
         expect(bridge.getEpgChannels).not.toHaveBeenCalled();
     });
 
-    it('keeps the provider schedule ahead of the name match', async () => {
+    it('asks the provider when the name match has no schedule', async () => {
         const provider = [{ title: 'Provider now' } as EpgItem];
         api.getFullEpg.mockResolvedValue(provider);
 
+        await expect(loadSchedule(null, 'Unmatched Name')).resolves.toBe(
+            provider
+        );
+        bridge.getChannelPrograms.mockResolvedValue([]);
         await expect(loadSchedule(null)).resolves.toBe(provider);
+        expect(api.getFullEpg).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps the provider schedule of an epg_channel_id ahead of the name match', async () => {
+        const provider = [{ title: 'Provider now' } as EpgItem];
+        api.getFullEpg.mockResolvedValue(provider);
+
+        await expect(loadSchedule('sample.unknown')).resolves.toBe(provider);
         expect(bridge.getEpgChannels).not.toHaveBeenCalled();
     });
 
-    it('falls back to the name match when the provider fails, else keeps the error', async () => {
+    it('keeps the provider error when neither the name nor the provider answers', async () => {
         const failure = new Error('provider down');
         api.getFullEpg.mockRejectedValue(failure);
 
         const items = await loadSchedule(null);
         expect(items[0].channel_id).toBe('sample.news.us');
+        expect(api.getFullEpg).not.toHaveBeenCalled();
 
         await expect(loadSchedule(null, 'Unmatched Name')).rejects.toBe(
             failure
@@ -274,8 +304,8 @@ describe('Xtream XMLTV name match (integration)', () => {
             null
         );
         await expect(
-            fallback.matchChannelsByName([channelName])
-        ).resolves.toEqual(new Map());
+            fallback.matchChannelNames([{ channelName }])
+        ).resolves.toEqual({ matches: [null], indexKey: 'unavailable' });
         await expect(loadSchedule(null)).resolves.toEqual([]);
         expect(bridge.getEpgChannels).not.toHaveBeenCalled();
         expect(bridge.getChannelPrograms).not.toHaveBeenCalled();

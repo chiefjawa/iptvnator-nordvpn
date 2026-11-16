@@ -11,6 +11,7 @@ import {
     SettingsStore,
 } from '@iptvnator/services';
 import { XtreamEpgNameIndexService } from './xtream-epg-name-index.service';
+import type { EpgNameMatch, EpgNameMatchHint } from './epg-name-match.util';
 
 type ElectronEpgBridge = {
     getChannelPrograms?: (
@@ -115,38 +116,50 @@ export class XtreamXmltvFallbackService {
     }
 
     /**
-     * XMLTV channel id matched automatically by the playlist channel name
-     * (`epg-name-match.util.ts`), or `null`. Only the last resort after a
-     * manual mapping, the provider's `epg_channel_id` and the provider API.
+     * The automatic name match for a playlist channel
+     * (`epg-name-match.util.ts`), or `null`.
      */
     async matchChannelByName(
-        channelName: string | null | undefined
-    ): Promise<string | null> {
+        channelName: string | null | undefined,
+        hint?: EpgNameMatchHint
+    ): Promise<EpgNameMatch | null> {
         if (!this.preferences.enabled() || !channelName?.trim()) return null;
         const index = await this.nameIndex.load();
-        return index?.resolve(channelName) ?? null;
+        return index?.match(channelName, hint) ?? null;
     }
 
     /**
      * Batch form of `matchChannelByName` for a viewport: one index load, then
-     * synchronous lookups. Keyed by the given name; unmatched names are absent.
+     * synchronous lookups, in request order. `indexKey` identifies the index
+     * used (`XtreamEpgNameIndexService.readyKey`).
      */
-    async matchChannelsByName(
-        channelNames: ReadonlyArray<string | null | undefined>
-    ): Promise<Map<string, string>> {
-        const out = new Map<string, string>();
-        if (!this.preferences.enabled()) return out;
-        const names = channelNames.filter(
-            (name): name is string => typeof name === 'string' && !!name.trim()
-        );
-        if (names.length === 0) return out;
-        const index = await this.nameIndex.load();
-        if (!index) return out;
-        for (const name of names) {
-            const id = index.resolve(name);
-            if (id) out.set(name, id);
-        }
-        return out;
+    async matchChannelNames(
+        requests: ReadonlyArray<{
+            channelName?: string | null;
+            categoryName?: string | null;
+        }>
+    ): Promise<{
+        matches: Array<EpgNameMatch | null>;
+        indexKey: string | null;
+    }> {
+        const named = requests.some((request) => request.channelName?.trim());
+        const index =
+            named && this.preferences.enabled()
+                ? await this.nameIndex.load()
+                : null;
+        return {
+            matches: requests.map((request) =>
+                index && request.channelName
+                    ? index.match(request.channelName, request)
+                    : null
+            ),
+            indexKey: this.nameIndex.readyKey(),
+        };
+    }
+
+    /** `XtreamEpgNameIndexService.readyKey`. */
+    nameIndexKey(): string | null {
+        return this.nameIndex.readyKey();
     }
 
     /**
@@ -154,9 +167,13 @@ export class XtreamXmltvFallbackService {
      * setting. The Xtream provider's call is supplied by the caller via
      * `fetchProvider` so this service stays unaware of credentials. When
      * `preferUploaded` is true and XMLTV has data, the provider is not
-     * called at all. When neither source has a schedule and the channel is
-     * not manually mapped, an XMLTV channel matched by `channelName` is the
-     * last resort.
+     * called at all.
+     *
+     * A channel with neither a manual mapping nor an `epgChannelId` reads
+     * the name-matched XMLTV schedule first and asks the provider only when
+     * that is empty: such providers return nothing for those channels. With
+     * an `epgChannelId` the name match is the last resort. A placeholder
+     * (`dummy-<n>`) match always comes after the provider.
      */
     async resolveCurrentEpg(args: {
         epgChannelId: string | null | undefined;
@@ -165,37 +182,78 @@ export class XtreamXmltvFallbackService {
         signal?: AbortSignal;
         /** Playlist channel name for the automatic name match. */
         channelName?: string | null;
+        /** Playlist category name: a country hint for the name match. */
+        categoryName?: string | null;
         /** `epgChannelId` comes from a manual mapping: no name match. */
         mapped?: boolean;
     }): Promise<EpgItem[]> {
-        const readByName = async (): Promise<EpgItem[]> => {
-            try {
-                args.signal?.throwIfAborted();
-                const matched = await this.matchChannelByName(args.channelName);
-                args.signal?.throwIfAborted();
-                // Equal to the provider id: already read, nothing new.
-                if (!matched || matched === (args.epgChannelId ?? '').trim())
-                    return [];
-                return await this.getProgramsForChannel(matched);
-            } catch (error) {
-                if (isAbortError(error)) throw error;
-                return [];
-            }
+        if (args.mapped) {
+            return resolveByIdOrProvider(args, (id) =>
+                this.getProgramsForChannel(id)
+            );
+        }
+        let match: Promise<EpgNameMatch | null> | undefined;
+        const readByName = (tiers: 'real' | 'placeholder' | 'all') => {
+            match ??= this.matchChannelByName(args.channelName, args).catch(
+                () => null
+            );
+            return this.readMatched(match, tiers, args);
         };
 
+        const withoutId = !(args.epgChannelId ?? '').trim();
+        if (withoutId) {
+            const named = await readByName('real');
+            if (named.length) return named;
+        }
+        const late = withoutId ? 'placeholder' : 'all';
         let programs: EpgItem[];
         try {
             programs = await resolveByIdOrProvider(args, (id) =>
                 this.getProgramsForChannel(id)
             );
         } catch (error) {
-            if (isAbortError(error) || args.mapped) throw error;
-            const named = await readByName();
+            if (isAbortError(error)) throw error;
+            const named = await readByName(late);
             if (!named.length) throw error;
             return named;
         }
-        if (programs.length || args.mapped) return programs;
-        return readByName();
+        return programs.length ? programs : readByName(late);
+    }
+
+    /**
+     * The schedule of the first matched candidate that has one, skipping
+     * the channel's own `epgChannelId` (already read). `tiers` picks real
+     * matches, the placeholder (`dummy-<n>`) match, or either.
+     */
+    private async readMatched(
+        pending: Promise<EpgNameMatch | null>,
+        tiers: 'real' | 'placeholder' | 'all',
+        args: { epgChannelId?: string | null; signal?: AbortSignal }
+    ): Promise<EpgItem[]> {
+        try {
+            args.signal?.throwIfAborted();
+            const match = await pending;
+            args.signal?.throwIfAborted();
+            const isPlaceholder = match?.tier === 'placeholder';
+            if (
+                !match ||
+                (tiers === 'real' && isPlaceholder) ||
+                (tiers === 'placeholder' && !isPlaceholder)
+            ) {
+                return [];
+            }
+            const own = (args.epgChannelId ?? '').trim();
+            for (const id of match.ids) {
+                if (id === own) continue;
+                const programs = await this.getProgramsForChannel(id);
+                args.signal?.throwIfAborted();
+                if (programs.length) return programs;
+            }
+            return [];
+        } catch (error) {
+            if (isAbortError(error)) throw error;
+            return [];
+        }
     }
 }
 
