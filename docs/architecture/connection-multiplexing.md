@@ -48,6 +48,11 @@ Renderer: `libs/ui/playback/src/lib/multiview/` (tile player, session
 service) and `libs/portal/xtream/feature/src/lib/multiview/` (screen, picker).
 IPC is `MULTIPLEX:*` in `connection-multiplex.interface.ts`.
 
+The screen restores its last tiles per playlist (`multiview-persistence.ts`)
+and keeps up to 12 named layouts (`multiview-layouts.ts`); both store stream
+ids and names only, never URLs. Switching layouts keeps the tiles whose
+channel stays, so their shared-connection reserve is not thrown away.
+
 ## Invariants
 
 - **One connection per group.** A connection is closed, confirmed closed, and

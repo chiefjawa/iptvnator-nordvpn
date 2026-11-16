@@ -24,6 +24,16 @@
 
     <span class="multiview__spacer"></span>
 
+    <app-multiview-layouts-menu
+        [layouts]="layouts.layouts()"
+        [activeName]="layouts.activeName()"
+        [canSave]="layouts.canSave()"
+        (applied)="layouts.apply($event)"
+        (saveRequested)="layouts.save()"
+        (renameRequested)="layouts.rename($event)"
+        (deleteRequested)="layouts.remove($event)"
+    />
+
     <button
         type="button"
         mat-flat-button

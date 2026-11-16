@@ -1127,7 +1127,24 @@
         "STATE_SKIPPED": "Skipped {{seconds}} s to keep up",
         "STATE_ERROR": "Connection refused ({{status}})",
         "STATE_ERROR_GENERIC": "Playback failed",
-        "STATE_UNSUPPORTED": "This stream cannot share a connection"
+        "STATE_UNSUPPORTED": "This stream cannot share a connection",
+        "LAYOUTS": {
+            "MENU": "Saved layouts",
+            "EMPTY": "No saved layouts yet. Save the current tiles to switch back in one click.",
+            "SAVE_CURRENT": "Save current tiles…",
+            "SAVE_TITLE": "Save layout",
+            "RENAME_TITLE": "Rename layout",
+            "NAME_LABEL": "Name",
+            "OVERWRITE_HINT": "Replaces the saved layout with this name.",
+            "SAVE": "Save",
+            "RENAME": "Rename",
+            "DELETE": "Delete",
+            "DELETE_TITLE": "Delete layout?",
+            "DELETE_MESSAGE": "The saved layout “{{name}}” will be removed. The tiles on screen stay as they are.",
+            "FULL": "You can keep up to {{count}} layouts. Delete one to save another.",
+            "SOME_MISSING": "{{count}} channel(s) of “{{name}}” are no longer in this playlist and were skipped.",
+            "ALL_MISSING": "None of the channels of “{{name}}” are in this playlist any more."
+        }
     },
     "LAYOUT": {
         "HIDE_CHANNELS_LIST": "Hide channels list",

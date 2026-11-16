@@ -59,12 +59,13 @@ test('@ui @xtream multiview header and tiles stay inside a narrow pane', async (
             header.locator('.multiview__back'),
             header.locator('.multiview__title'),
             header.locator('.multiview__mode'),
+            header.locator('[data-test-id="multiview-layouts"]'),
             header.locator('.multiview__add'),
         ];
         await expectInside(
             header,
             header.locator(
-                '.multiview__back, .multiview__title, .multiview__mode, .multiview__add'
+                '.multiview__back, .multiview__title, .multiview__mode, [data-test-id="multiview-layouts"], .multiview__add'
             ),
             label
         );
@@ -159,4 +160,91 @@ test('@ui @xtream live sidebar header keeps the multiview button clickable and i
 
     await header.locator('[data-test-id="open-multiview"]').click();
     await expect(page).toHaveURL(/\/live\/multiview$/);
+});
+
+test('@ui @xtream multiview saves, switches, renames and deletes named layouts', async ({
+    page,
+}) => {
+    test.setTimeout(90_000);
+    const playlistPath = playlistPathOf(page.url());
+    const playlistId = playlistPath.split('/').pop();
+    // A layout with a channel the playlist no longer has (99999999).
+    await page.evaluate(
+        ({ channelsKey, layoutsKey }) => {
+            localStorage.setItem(channelsKey, JSON.stringify([10000, 10001]));
+            localStorage.setItem(
+                layoutsKey,
+                JSON.stringify([
+                    { name: 'Stale', xtreamIds: [10002, 99999999] },
+                ])
+            );
+        },
+        {
+            channelsKey: `iptvnator-multiview-channels:${playlistId}`,
+            layoutsKey: `iptvnator-multiview-layouts:${playlistId}`,
+        }
+    );
+    await page.goto(`${playlistPath}/live/multiview`);
+    const tiles = page.locator('app-multiview-tile');
+    await expect(tiles).toHaveCount(2);
+
+    const openMenu = () =>
+        page.locator('[data-test-id="multiview-layouts"]').click();
+
+    // Save the two tiles under a name.
+    await openMenu();
+    await page.locator('[data-test-id="multiview-layout-save"]').click();
+    await page.locator('[data-test-id="multiview-layout-name"]').fill('Pair');
+    await page.locator('[data-test-id="multiview-layout-name-submit"]').click();
+
+    // Switching to the stale layout skips the missing channel and says so.
+    await openMenu();
+    await page
+        .locator('[data-test-id="multiview-layout-apply"]', { hasText: 'Stale' })
+        .click();
+    await expect(tiles).toHaveCount(1);
+    await expect(page.locator('mat-snack-bar-container')).toContainText(
+        'no longer in this playlist'
+    );
+
+    // One click brings the saved pair back, marked as current.
+    await openMenu();
+    await page
+        .locator('[data-test-id="multiview-layout-apply"]', { hasText: 'Pair' })
+        .click();
+    await expect(tiles).toHaveCount(2);
+    await openMenu();
+    await expect(
+        page.locator('[data-test-id="multiview-layout-apply"]', {
+            hasText: 'Pair',
+        })
+    ).toHaveAttribute('aria-current', 'true');
+
+    // Rename, then delete.
+    await page.locator('[data-test-id="multiview-layout-rename-menu"]').click();
+    await page
+        .locator('[data-test-id="multiview-layout-rename"]', { hasText: 'Pair' })
+        .click();
+    const nameField = page.locator('[data-test-id="multiview-layout-name"]');
+    await expect(nameField).toHaveValue('Pair');
+    await nameField.fill('Duo');
+    await page.locator('[data-test-id="multiview-layout-name-submit"]').click();
+    await openMenu();
+    await page.locator('[data-test-id="multiview-layout-delete-menu"]').click();
+    await page
+        .locator('[data-test-id="multiview-layout-delete"]', { hasText: 'Duo' })
+        .click();
+    await page.getByRole('button', { name: 'Delete' }).last().click();
+
+    await expect
+        .poll(() =>
+            page.evaluate(
+                (key) => JSON.parse(localStorage.getItem(key) ?? '[]'),
+                `iptvnator-multiview-layouts:${playlistId}`
+            )
+        )
+        .toEqual([{ name: 'Stale', xtreamIds: [10002, 99999999] }]);
+    // The last-used tiles are still what reopening restores.
+    await page.reload();
+    await expect(tiles).toHaveCount(2);
 });

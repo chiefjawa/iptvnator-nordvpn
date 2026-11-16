@@ -28,6 +28,8 @@ import {
     MultiviewChannel,
     MultiviewChannelPickerComponent,
 } from './multiview-channel-picker.component';
+import { createMultiviewLayouts } from './multiview-layouts.controller';
+import { MultiviewLayoutsMenuComponent } from './multiview-layouts-menu.component';
 import {
     readSavedMultiviewChannels,
     saveMultiviewChannels,
@@ -65,6 +67,7 @@ interface LiveStreamLike {
         MatButtonModule,
         MatIcon,
         MultiviewChannelPickerComponent,
+        MultiviewLayoutsMenuComponent,
         MultiviewTileComponent,
         RouterLink,
         TranslatePipe,
@@ -110,6 +113,20 @@ export class XtreamMultiviewComponent {
             }))
     );
 
+    readonly layouts = createMultiviewLayouts<MultiviewChannel>({
+        playlistId: computed(() => this.xtreamStore.currentPlaylist()?.id ?? null),
+        tileIds: computed(() =>
+            this.tiles().map((tile) => tile.channel.xtreamId)
+        ),
+        channelsById: computed(
+            () =>
+                new Map(
+                    this.channels().map((channel) => [channel.xtreamId, channel])
+                )
+        ),
+        show: (channels) => this.showChannels(channels),
+    });
+
     constructor() {
         // Bring back the last set of tiles once the channel list is loaded.
         effect(() => {
@@ -150,6 +167,41 @@ export class XtreamMultiviewComponent {
         }
         this.persist();
         await this.session.removeTile(tileId).catch(() => undefined);
+    }
+
+    /**
+     * Shows exactly these channels, in order. Tiles already showing one of
+     * them keep playing (and keep their reserve); the rest are replaced.
+     */
+    private async showChannels(channels: MultiviewChannel[]): Promise<void> {
+        const pool = [...this.tiles()];
+        const kept = new Set<MultiviewTile>();
+        const next = channels.slice(0, MAX_TILES).map((channel) => {
+            const index = pool.findIndex(
+                (tile) => tile.channel.xtreamId === channel.xtreamId
+            );
+            if (index < 0) {
+                return this.createTile(channel);
+            }
+            const [tile] = pool.splice(index, 1);
+            kept.add(tile);
+            return tile;
+        });
+        this.tiles.set(next);
+        if (!next.some((tile) => tile.id === this.focusedId())) {
+            this.focusedId.set(next[0]?.id ?? null);
+        }
+        this.persist();
+        await Promise.all(
+            pool.map((tile) =>
+                this.session.removeTile(tile.id).catch(() => undefined)
+            )
+        );
+        for (const tile of next) {
+            if (!kept.has(tile)) {
+                await this.startTile(tile);
+            }
+        }
     }
 
     private async addTile(channel: MultiviewChannel): Promise<void> {
