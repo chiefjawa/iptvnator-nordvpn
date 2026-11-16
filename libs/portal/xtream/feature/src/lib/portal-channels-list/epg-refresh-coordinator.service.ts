@@ -40,13 +40,19 @@ export function xtreamCredentialsOf(playlist: {
 
 /** One queue entry for a channel row. */
 export function epgQueueEntryFor(
-    channel: { xtream_id: number; epg_channel_id?: string | null },
+    channel: {
+        xtream_id: number;
+        epg_channel_id?: string | null;
+        title?: string | null;
+        name?: string | null;
+    },
     playlistId: string | null | undefined
 ) {
     return {
         streamId: channel.xtream_id,
         epgChannelId: channel.epg_channel_id ?? null,
         playlistId: playlistId ?? null,
+        channelName: channel.title || channel.name || null,
     };
 }
 

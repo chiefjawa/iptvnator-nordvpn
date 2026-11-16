@@ -4,6 +4,7 @@ import {
     EPG_REFRESH_INTERVAL_MS,
     EpgRefreshContribution,
     EpgRefreshCoordinator,
+    epgQueueEntryFor,
     xtreamCredentialsOf,
 } from './epg-refresh-coordinator.service';
 
@@ -146,5 +147,23 @@ describe('EpgRefreshCoordinator', () => {
         epgQueueService.enqueue.mockResolvedValue(undefined);
         jest.advanceTimersByTime(EPG_REFRESH_INTERVAL_MS);
         expect(epgQueueService.enqueue).toHaveBeenCalledTimes(2);
+    });
+
+    it('hands the queue the channel name for the XMLTV name match', () => {
+        expect(
+            epgQueueEntryFor(
+                { xtream_id: 5, title: 'Synthetic Title', name: 'Raw Name' },
+                'playlist-1'
+            )
+        ).toEqual({
+            streamId: 5,
+            epgChannelId: null,
+            playlistId: 'playlist-1',
+            channelName: 'Synthetic Title',
+        });
+        expect(
+            epgQueueEntryFor({ xtream_id: 6, name: 'Raw Name' }, null)
+                .channelName
+        ).toBe('Raw Name');
     });
 });

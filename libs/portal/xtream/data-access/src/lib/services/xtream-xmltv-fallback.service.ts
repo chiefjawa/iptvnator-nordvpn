@@ -10,6 +10,7 @@ import {
     EpgSourceSettingsService,
     SettingsStore,
 } from '@iptvnator/services';
+import { XtreamEpgNameIndexService } from './xtream-epg-name-index.service';
 
 type ElectronEpgBridge = {
     getChannelPrograms?: (
@@ -28,6 +29,7 @@ export class XtreamXmltvFallbackService {
     private readonly settingsStore = inject(SettingsStore);
     private readonly sources = inject(EpgSourceSettingsService);
     private readonly preferences = inject(EpgPreferencesService);
+    private readonly nameIndex = inject(XtreamEpgNameIndexService);
 
     /**
      * `DataService.isElectron` is intentionally not consulted here: it
@@ -113,42 +115,126 @@ export class XtreamXmltvFallbackService {
     }
 
     /**
+     * XMLTV channel id matched automatically by the playlist channel name
+     * (`epg-name-match.util.ts`), or `null`. Only the last resort after a
+     * manual mapping, the provider's `epg_channel_id` and the provider API.
+     */
+    async matchChannelByName(
+        channelName: string | null | undefined
+    ): Promise<string | null> {
+        if (!this.preferences.enabled() || !channelName?.trim()) return null;
+        const index = await this.nameIndex.load();
+        return index?.resolve(channelName) ?? null;
+    }
+
+    /**
+     * Batch form of `matchChannelByName` for a viewport: one index load, then
+     * synchronous lookups. Keyed by the given name; unmatched names are absent.
+     */
+    async matchChannelsByName(
+        channelNames: ReadonlyArray<string | null | undefined>
+    ): Promise<Map<string, string>> {
+        const out = new Map<string, string>();
+        if (!this.preferences.enabled()) return out;
+        const names = channelNames.filter(
+            (name): name is string => typeof name === 'string' && !!name.trim()
+        );
+        if (names.length === 0) return out;
+        const index = await this.nameIndex.load();
+        if (!index) return out;
+        for (const name of names) {
+            const id = index.resolve(name);
+            if (id) out.set(name, id);
+        }
+        return out;
+    }
+
+    /**
      * Resolve EPG for a single channel under the user's source-priority
      * setting. The Xtream provider's call is supplied by the caller via
      * `fetchProvider` so this service stays unaware of credentials. When
      * `preferUploaded` is true and XMLTV has data, the provider is not
-     * called at all.
+     * called at all. When neither source has a schedule and the channel is
+     * not manually mapped, an XMLTV channel matched by `channelName` is the
+     * last resort.
      */
     async resolveCurrentEpg(args: {
         epgChannelId: string | null | undefined;
         preferUploaded: boolean;
         fetchProvider: () => Promise<EpgItem[]>;
         signal?: AbortSignal;
+        /** Playlist channel name for the automatic name match. */
+        channelName?: string | null;
+        /** `epgChannelId` comes from a manual mapping: no name match. */
+        mapped?: boolean;
     }): Promise<EpgItem[]> {
-        args.signal?.throwIfAborted();
-        const id = (args.epgChannelId ?? '').trim();
-
-        if (!id) return args.fetchProvider();
-        const readXmltv = () => {
-            args.signal?.throwIfAborted();
-            return this.getProgramsForChannel(id);
+        const readByName = async (): Promise<EpgItem[]> => {
+            try {
+                args.signal?.throwIfAborted();
+                const matched = await this.matchChannelByName(args.channelName);
+                args.signal?.throwIfAborted();
+                // Equal to the provider id: already read, nothing new.
+                if (!matched || matched === (args.epgChannelId ?? '').trim())
+                    return [];
+                return await this.getProgramsForChannel(matched);
+            } catch (error) {
+                if (isAbortError(error)) throw error;
+                return [];
+            }
         };
 
-        const primary = args.preferUploaded ? readXmltv : args.fetchProvider;
-        const fallback = args.preferUploaded ? args.fetchProvider : readXmltv;
-
+        let programs: EpgItem[];
         try {
-            const programs = await primary();
-            if (programs.length) return programs;
+            programs = await resolveByIdOrProvider(args, (id) =>
+                this.getProgramsForChannel(id)
+            );
         } catch (error) {
-            if (error instanceof Error && error.name === 'AbortError')
-                throw error;
-            const programs = await fallback();
-            if (!programs.length) throw error;
-            return programs;
+            if (isAbortError(error) || args.mapped) throw error;
+            const named = await readByName();
+            if (!named.length) throw error;
+            return named;
         }
-        return fallback();
+        if (programs.length || args.mapped) return programs;
+        return readByName();
     }
+}
+
+/** Manual mapping or provider id first, under the source-priority setting. */
+async function resolveByIdOrProvider(
+    args: {
+        epgChannelId: string | null | undefined;
+        preferUploaded: boolean;
+        fetchProvider: () => Promise<EpgItem[]>;
+        signal?: AbortSignal;
+    },
+    readXmltvById: (id: string) => Promise<EpgItem[]>
+): Promise<EpgItem[]> {
+    args.signal?.throwIfAborted();
+    const id = (args.epgChannelId ?? '').trim();
+
+    if (!id) return args.fetchProvider();
+    const readXmltv = () => {
+        args.signal?.throwIfAborted();
+        return readXmltvById(id);
+    };
+
+    const primary = args.preferUploaded ? readXmltv : args.fetchProvider;
+    const fallback = args.preferUploaded ? args.fetchProvider : readXmltv;
+
+    try {
+        const programs = await primary();
+        if (programs.length) return programs;
+    } catch (error) {
+        if (isAbortError(error)) throw error;
+        const programs = await fallback();
+        if (!programs.length) throw error;
+        return programs;
+    }
+    return fallback();
+}
+
+function isAbortError(error: unknown): boolean {
+    return error instanceof Error && error.name === 'AbortError';
 }
 
 function mapEpgProgramToEpgItem(

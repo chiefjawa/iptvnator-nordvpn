@@ -84,6 +84,8 @@ export function withEpg() {
         selectedItem?: () => {
             xtream_id?: number | null;
             epg_channel_id?: string | null;
+            title?: string | null;
+            name?: string | null;
         } | null;
     };
 
@@ -207,7 +209,12 @@ export function withEpg() {
                                     id: storeAny.currentPlaylist?.()?.id,
                                 },
                                 xtreamId,
-                                selectedItem?.epg_channel_id ?? null
+                                selectedItem?.epg_channel_id ?? null,
+                                {
+                                    channelName:
+                                        selectedItem?.title ||
+                                        selectedItem?.name,
+                                }
                             ));
 
                         if (!isCurrent()) return [];

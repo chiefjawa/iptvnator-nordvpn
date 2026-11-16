@@ -106,7 +106,7 @@ export function injectXtreamGuideSchedules(
                         playlist,
                         item.xtream_id,
                         item.epg_channel_id ?? null,
-                        options
+                        { ...options, channelName: item.title || item.name }
                     );
                     return { items, programs: items.map(toSharedEpgProgram) };
                 },

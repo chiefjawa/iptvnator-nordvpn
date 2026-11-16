@@ -466,7 +466,13 @@ describe('XtreamEpgGuideSourceService', () => {
             expect(service.playingSchedule()?.[0].title).toBe(
                 'Synthetic Copy Programme'
             );
-        }
+        } // The channel name feeds the automatic XMLTV name match.
+        expect(load).toHaveBeenCalledWith(
+            expect.anything(),
+            101,
+            'sample.a',
+            expect.objectContaining({ channelName: 'Synthetic Channel A' })
+        );
     });
 
     it('uses provider stream identity, excludes hidden and locked categories and does no eager schedule work', () => {

@@ -29,6 +29,12 @@ export interface EpgQueueEntry {
     epgChannelId?: string | null;
     /** Owning playlist — required to resolve manual EPG mappings. */
     playlistId?: string | null;
+    /**
+     * Playlist channel name. When neither a manual mapping, the
+     * `epgChannelId` nor the provider has a programme, an XMLTV channel
+     * matched by this name is the last resort.
+     */
+    channelName?: string | null;
 }
 
 /**
@@ -48,6 +54,11 @@ export interface EpgQueueEntry {
  * older call commit stale queue state. A generation counter gates every
  * shared-state write behind a "still latest" check so only the most
  * recent call's results are applied.
+ *
+ * Unmapped entries are also matched by name against the XMLTV channels
+ * (`XtreamXmltvFallbackService.matchChannelsByName`, an in-memory index);
+ * the matched ids join the same batch IPC. Their programme is used only
+ * when the provider returned nothing and the `epgChannelId` had none.
  */
 @Injectable({ providedIn: 'root' })
 export class EpgQueueService implements OnDestroy {
@@ -79,6 +90,7 @@ export class EpgQueueService implements OnDestroy {
     private readonly invalidationEpoch = new Map<number, number>();
     private readonly epgChannelByStreamId = new Map<number, string>();
     private readonly xmltvPreviewByStreamId = new Map<number, EpgItem>();
+    private readonly namePreviewByStreamId = new Map<number, EpgItem>();
     private visibleSet = new Set<number>();
     private processing = false;
     private enqueueGeneration = 0;
@@ -144,6 +156,7 @@ export class EpgQueueService implements OnDestroy {
         this.failureTimestamps.delete(streamId);
         this.epgChannelByStreamId.delete(streamId);
         this.xmltvPreviewByStreamId.delete(streamId);
+        this.namePreviewByStreamId.delete(streamId);
         this.inFlight.delete(streamId);
         this.invalidationEpoch.set(
             streamId,
@@ -200,9 +213,10 @@ export class EpgQueueService implements OnDestroy {
         // correct EPG channel ID for the XMLTV batch call that follows.
         // Guarded so environments without the bridge (PWA) skip the await
         // entirely and the enqueue keeps its original microtask timing.
-        if (typeof window.electron?.getEpgMappingsBatch === 'function') {
-            await this.resolveManualMappings(normalized);
-        }
+        const mapped =
+            typeof window.electron?.getEpgMappingsBatch === 'function'
+                ? await this.resolveManualMappings(normalized)
+                : new Set<number>();
 
         const streamsByEpgId = new Map<string, number[]>();
         for (const entry of normalized) {
@@ -219,8 +233,19 @@ export class EpgQueueService implements OnDestroy {
         this.visibleSet = new Set(visibleIds);
         this.queue = [];
 
+        const nameCandidates = normalized.filter(
+            (entry) => !mapped.has(entry.streamId) && entry.channelName?.trim()
+        );
+        const nameIdByStreamId = nameCandidates.length
+            ? await this.matchByName(nameCandidates)
+            : new Map<number, string>();
         const batchResult = await this.fetchXmltvCurrentPure(
-            Array.from(streamsByEpgId.keys())
+            Array.from(
+                new Set([
+                    ...streamsByEpgId.keys(),
+                    ...nameIdByStreamId.values(),
+                ])
+            )
         );
 
         if (generation !== this.enqueueGeneration) return;
@@ -236,12 +261,17 @@ export class EpgQueueService implements OnDestroy {
                 this.epgChannelByStreamId.delete(entry.streamId);
             }
             this.xmltvPreviewByStreamId.delete(entry.streamId);
+            this.namePreviewByStreamId.delete(entry.streamId);
         }
         for (const [epgChannelId, item] of Object.entries(batchResult)) {
             const streams = streamsByEpgId.get(epgChannelId) ?? [];
             for (const streamId of streams) {
                 this.xmltvPreviewByStreamId.set(streamId, item);
             }
+        }
+        for (const [streamId, epgChannelId] of nameIdByStreamId) {
+            const item = batchResult[epgChannelId];
+            if (item) this.namePreviewByStreamId.set(streamId, item);
         }
 
         const preferUploaded =
@@ -283,6 +313,27 @@ export class EpgQueueService implements OnDestroy {
     }
 
     /**
+     * XMLTV channel ids matched by name for unmapped entries, keyed by
+     * stream id. An id equal to the entry's own `epgChannelId` is left out:
+     * the batch already reads it.
+     */
+    private async matchByName(
+        entries: ReadonlyArray<EpgQueueEntry>
+    ): Promise<Map<number, string>> {
+        const matches = await this.fallbackService.matchChannelsByName(
+            entries.map((entry) => entry.channelName)
+        );
+        const out = new Map<number, string>();
+        for (const entry of entries) {
+            const id = matches.get(entry.channelName ?? '');
+            if (id && id !== entry.epgChannelId?.trim()) {
+                out.set(entry.streamId, id);
+            }
+        }
+        return out;
+    }
+
+    /**
      * Resolve manual EPG mappings for the queued entries.
      *
      * The user may have opened the mapping dialog (right-click → "Map EPG")
@@ -295,13 +346,14 @@ export class EpgQueueService implements OnDestroy {
      */
     private async resolveManualMappings(
         entries: EpgQueueEntry[]
-    ): Promise<void> {
+    ): Promise<Set<number>> {
+        const mapped = new Set<number>();
         const getEpgMappingsBatch =
             typeof window.electron?.getEpgMappingsBatch === 'function'
                 ? window.electron.getEpgMappingsBatch
                 : null;
         if (!getEpgMappingsBatch) {
-            return;
+            return mapped;
         }
 
         const keyByStreamId = new Map<number, string>();
@@ -313,7 +365,7 @@ export class EpgQueueService implements OnDestroy {
             );
         }
         if (keyByStreamId.size === 0) {
-            return;
+            return mapped;
         }
 
         try {
@@ -324,27 +376,33 @@ export class EpgQueueService implements OnDestroy {
             ]);
             for (const entry of entries) {
                 const key = keyByStreamId.get(entry.streamId);
-                const mapped = key ? mappings[key]?.trim() : undefined;
-                if (mapped) {
+                const mappedId = key ? mappings[key]?.trim() : undefined;
+                if (mappedId) {
                     this.logger.info(
-                        `Mapped stream ${entry.streamId}: ${entry.epgChannelId ?? '(none)'} → ${mapped}`
+                        `Mapped stream ${entry.streamId}: ${entry.epgChannelId ?? '(none)'} → ${mappedId}`
                     );
-                    entry.epgChannelId = mapped;
+                    entry.epgChannelId = mappedId;
+                    mapped.add(entry.streamId);
                 }
             }
         } catch {
             // Mapping lookup failure is non-fatal; keep the original
             // epgChannelId values and proceed.
         }
+        return mapped;
     }
 
     private pruneEphemeralMaps(visibleIds: Set<number>): void {
-        for (const id of [...this.epgChannelByStreamId.keys()]) {
+        for (const id of new Set([
+            ...this.epgChannelByStreamId.keys(),
+            ...this.namePreviewByStreamId.keys(),
+        ])) {
             // getCached() honors TTL and lazily evicts expired entries;
             // a raw cache.has() would keep stale previews alive forever.
             if (!visibleIds.has(id) && this.getCached(id) === null) {
                 this.epgChannelByStreamId.delete(id);
                 this.xmltvPreviewByStreamId.delete(id);
+                this.namePreviewByStreamId.delete(id);
             }
         }
     }
@@ -425,7 +483,10 @@ export class EpgQueueService implements OnDestroy {
                 return;
             }
 
-            const xmltv = this.xmltvPreviewByStreamId.get(streamId);
+            // `epgChannelId` XMLTV first, the name match last.
+            const xmltv =
+                this.xmltvPreviewByStreamId.get(streamId) ??
+                this.namePreviewByStreamId.get(streamId);
             this.recordSuccess(streamId, xmltv ? [xmltv] : []);
         } finally {
             // Only release the in-flight marker if this request still owns it.

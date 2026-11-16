@@ -22,17 +22,26 @@ export class XtreamFullEpgService {
         { id, ...credentials }: XtreamCredentials & { id?: string },
         streamId: number,
         epgChannelId: string | null,
-        options?: Pick<XtreamRequestOptions, 'signal' | 'sessionId'>
+        {
+            channelName,
+            ...options
+        }: Pick<XtreamRequestOptions, 'signal' | 'sessionId'> & {
+            /** Playlist channel name for the automatic XMLTV name match. */
+            channelName?: string | null;
+        } = {}
     ): Promise<EpgItem[]> {
-        options?.signal?.throwIfAborted();
+        options.signal?.throwIfAborted();
         const preferUploaded =
             this.settings.preferUploadedEpgOverXtream?.() ?? false;
+        let mapped = false;
         if (this.runtime.supportsEpgMapping && id) {
             try {
                 const mapping = await window.electron?.getEpgMapping?.(
                     buildXtreamEpgMappingKey(id, streamId)
                 );
-                epgChannelId = mapping?.epgChannelId?.trim() || epgChannelId;
+                const mappedId = mapping?.epgChannelId?.trim();
+                mapped = Boolean(mappedId);
+                epgChannelId = mappedId || epgChannelId;
             } catch {
                 // Keep the provider's EPG identifier if mapping lookup fails.
             }
@@ -41,7 +50,9 @@ export class XtreamFullEpgService {
         return this.xmltv.resolveCurrentEpg({
             epgChannelId,
             preferUploaded,
-            signal: options?.signal,
+            signal: options.signal,
+            channelName,
+            mapped,
             fetchProvider: () =>
                 this.api.getFullEpg(credentials, streamId, {
                     ...options,

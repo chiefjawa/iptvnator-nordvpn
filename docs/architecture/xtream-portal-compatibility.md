@@ -1034,6 +1034,42 @@ REST MPEG-TS timeshift URL the PWA falls back to (see Catch-Up Playback URLs).
 It gates `archivePlaybackAvailable` (Live TV) and `timelineArchiveAvailable`
 (Favorites/Recent); the desktop app keeps all three actions.
 
+### XMLTV name match
+
+Many providers send no `epg_channel_id`. When a live channel has no manual
+mapping and neither its `epg_channel_id` in XMLTV nor the provider has a
+programme, the channel name is matched against the stored XMLTV channels'
+display names (`epg-name-match.util.ts`). This applies to the row previews
+(`EpgQueueService`) and, through `XtreamFullEpgService` and
+`XtreamXmltvFallbackService.resolveCurrentEpg`, to the live EPG panel and the
+multi-channel guide. Collection and dashboard previews
+(`StreamResolverService`) do not use it. Precedence, under either
+`preferUploadedEpgOverXtream` setting: manual mapping, then the
+`epg_channel_id` XMLTV and the provider in the configured order, then the name
+match. A manually mapped channel is never name-matched. A failed provider read
+falls back to the name match in the panel and guide; the row queue keeps its
+failure cooldown, as for the `epg_channel_id` fallback.
+
+Both names are NFKC-normalized (superscript `ᴿᴬᵂ` becomes `raw`), lower-cased
+and whitespace-collapsed. An exact match against a real XMLTV id wins.
+Otherwise a loose key drops a leading one- or two-token prefix followed by
+`:`, `|`, a bar glyph or ` - ` (`US: `, `XY&Z: `, `UK ▎ `), surrounding `##`
+decorations, quality tags as whole words (`RAW`, `SD`, `HD`, `FHD`, `UHD`,
+`4K`, `8K`, `HEVC`, `H.265`, `50FPS`, `1080p`, `VIP`, `LQ`, `HQ`, `BACKUP` and
+similar) and punctuation; the key needs three characters. Placeholder channels
+(`dummy-<n>`, filler programmes) never loose-match and win only on an exact
+name without a real candidate. Several XMLTV channels with one key resolve to
+the lowest id, so the choice is stable; a manual mapping overrides it. The
+matched id goes through the ordinary XMLTV-by-id reads, so the display offset
+applies identically.
+
+`XtreamEpgNameIndexService` builds the index lazily on the first lookup that
+needs it (one `getEpgChannels` IPC, never at startup) and reuses it until the
+EPG source revision changes (settings, reconciliation, the global EPG toggle)
+or an import reports `complete`. Lookups are synchronous map reads. The row
+queue adds name-matched ids to its single current-programme batch IPC per
+viewport.
+
 ## User-Agent
 
 Xtream account, catalog, detail, EPG, and source-health API requests carry the

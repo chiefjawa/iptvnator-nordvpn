@@ -69,6 +69,7 @@ function configureStore(setup: TestStoreSetup) {
 
     const fallbackService = {
         getProgramsForChannel: jest.fn<Promise<EpgItem[]>, unknown[]>(),
+        matchChannelByName: jest.fn(async () => null),
         resolveCurrentEpg:
             XtreamXmltvFallbackService.prototype.resolveCurrentEpg,
     };

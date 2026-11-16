@@ -12,6 +12,7 @@ describe('XtreamFullEpgService', () => {
     >();
     const getFullEpg = jest.fn(async () => []);
     const getProgramsForChannel = jest.fn(async () => []);
+    const matchChannelByName = jest.fn(async () => null);
     const credentials = {
         id: 'synthetic-portal',
         serverUrl: 'https://provider.example',
@@ -44,6 +45,7 @@ describe('XtreamFullEpgService', () => {
                     provide: XtreamXmltvFallbackService,
                     useValue: {
                         getProgramsForChannel,
+                        matchChannelByName,
                         resolveCurrentEpg:
                             XtreamXmltvFallbackService.prototype
                                 .resolveCurrentEpg,
