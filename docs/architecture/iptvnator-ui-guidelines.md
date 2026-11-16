@@ -845,6 +845,17 @@ remain local when the meaning is explicit.
   `XtreamContentGateComponent` then replaces the live layout with an error view,
   so the shell keeps the rail unfolded (`isLiveContentBlocked`) and the rail
   withholds its hide chevron, rather than hiding the only way back.
+- Narrow windows fold the levels on their own. While an Xtream or Stalker
+  channel plays above the phone breakpoint, `LivePanelsController`
+  (`playerShown`, `live-panels-auto-fit.ts`) measures the live layout and sets
+  `LiveLayoutSidebarStateService.setFitLevel()` to the least fold that leaves
+  the player 320px beside the channels rail at its 250px minimum
+  (`fitLivePanels`). The shown level is the deeper of that and the stored
+  preference; the fold is never persisted, so widening the window restores
+  what the user chose. A level changed while the width forces a fold is a
+  session-only choice for narrow windows (`stateOf` is the shown level,
+  `preferenceOf` the stored one). M3U and the unified-collection live tab do
+  not use the controller and keep their own layout.
 - Xtream Live TV's root view (`/live` with no selected category) follows the
   same paginated `All Items` shell as VOD and Series: a widget header with the
   total channel count, page-size controls, and page navigation above the shared

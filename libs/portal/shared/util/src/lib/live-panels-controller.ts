@@ -11,6 +11,7 @@ import {
     handoffFocusOnLiveSidebarChange,
 } from './focus-handoff';
 import { LIVE_CATEGORIES_POPOVER } from './live-categories-popover.token';
+import { autoFitLivePanels } from './live-panels-auto-fit';
 import { LiveLayoutSidebarStateService } from './live-layout-sidebar-state.service';
 import { LiveSidebarState, LiveSidebarSurface } from './live-sidebar-state';
 
@@ -24,6 +25,11 @@ export interface LivePanelsControllerOptions {
     >;
     /** The floating restore handle, once rendered at player-only. */
     readonly restoreButton: Signal<ElementRef<HTMLElement> | undefined>;
+    /**
+     * A channel's player is on screen. With it, the panels fold on their
+     * own while the window is too narrow to give the player its minimum.
+     */
+    readonly playerShown?: Signal<boolean>;
 }
 
 /**
@@ -60,6 +66,13 @@ export class LivePanelsController {
 
     constructor(private readonly options: LivePanelsControllerOptions) {
         const surface = options.surface;
+        if (options.playerShown) {
+            autoFitLivePanels({
+                surface,
+                playerShown: options.playerShown,
+                hasCategoriesRail: this.categoriesPopover !== null,
+            });
+        }
         this.isSidebarCollapsed = this.sidebarState.isCollapsedFor(surface);
         const categoriesHidden =
             this.sidebarState.areCategoriesHiddenFor(surface);

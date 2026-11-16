@@ -567,6 +567,9 @@ export class StalkerLiveStreamLayoutComponent
         restoreButton: computed(
             () => this.overview()?.restoreButton() ?? this.restoreButton()
         ),
+        playerShown: computed(
+            () => !!this.stalkerStore.selectedItem() && !!this.streamUrl()
+        ),
     });
     /**
      * Folded categories rail with no channels header to carry the way back

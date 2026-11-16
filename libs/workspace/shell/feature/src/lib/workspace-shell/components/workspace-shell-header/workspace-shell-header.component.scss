@@ -546,6 +546,25 @@
     }
 }
 
+// Below ~420px the desktop app's trailing Downloads group (Electron only)
+// no longer fitted beside the drawer toggle, switcher, search and a route's
+// two buttons, and was pushed off the right edge. The switcher ellipsizes
+// down to its icon, the gaps tighten and the group drops its divider.
+@media (max-width: 420px) {
+    .workspace-header {
+        gap: 4px;
+    }
+
+    .playlist-switcher {
+        min-width: 48px;
+    }
+
+    .header-actions--trailing {
+        padding-left: 0;
+        border-left: 0;
+    }
+}
+
 .header-shortcut.is-active {
     background: var(--app-selection-surface);
     color: var(--app-selection-color);

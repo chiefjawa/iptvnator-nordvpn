@@ -150,4 +150,59 @@ describe('LiveLayoutSidebarStateService', () => {
             localStorage.getItem(LEGACY_LIVE_SIDEBAR_STATE_STORAGE_KEY)
         ).toBeNull();
     });
+
+    describe('fit level of a narrow window', () => {
+        const key = liveSidebarStateStorageKey('portal');
+
+        it('folds at least as far as the width needs without storing it', () => {
+            const service = createService();
+
+            service.setFitLevel('portal', 'categories-hidden');
+
+            expect(service.stateOf('portal')()).toBe('categories-hidden');
+            expect(service.areCategoriesHiddenFor('portal')()).toBe(true);
+            expect(service.preferenceOf('portal')()).toBe('expanded');
+            expect(localStorage.getItem(key)).toBeNull();
+
+            service.setFitLevel('portal', 'expanded');
+            expect(service.stateOf('portal')()).toBe('expanded');
+        });
+
+        it('never unfolds past a stored preference', () => {
+            localStorage.setItem(key, 'collapsed');
+            const service = createService();
+
+            service.setFitLevel('portal', 'categories-hidden');
+
+            expect(service.stateOf('portal')()).toBe('collapsed');
+        });
+
+        it('keeps a choice made while narrow for the session, apart from the preference', () => {
+            const service = createService();
+            service.setFitLevel('portal', 'collapsed');
+            expect(service.isCollapsedFor('portal')()).toBe(true);
+
+            // Cmd/Ctrl+B while narrow brings the channels back.
+            service.toggle('portal');
+            expect(service.stateOf('portal')()).toBe('categories-hidden');
+            service.showCategories('portal');
+            expect(service.stateOf('portal')()).toBe('expanded');
+            expect(localStorage.getItem(key)).toBeNull();
+
+            // Wide again: the preference; narrow again: the session choice.
+            service.setFitLevel('portal', 'expanded');
+            service.hideCategories('portal');
+            expect(localStorage.getItem(key)).toBe('categories-hidden');
+            service.setFitLevel('portal', 'collapsed');
+            expect(service.stateOf('portal')()).toBe('expanded');
+            service.setFitLevel('portal', 'expanded');
+            expect(service.stateOf('portal')()).toBe('categories-hidden');
+        });
+
+        it('leaves the other surfaces alone', () => {
+            const service = createService();
+            service.setFitLevel('portal', 'collapsed');
+            expect(service.stateOf('m3u')()).toBe('expanded');
+        });
+    });
 });

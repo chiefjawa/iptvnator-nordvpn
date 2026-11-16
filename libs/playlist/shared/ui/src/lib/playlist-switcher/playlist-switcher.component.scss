@@ -3,6 +3,7 @@
 :host {
     display: block;
     width: 100%;
+    container: playlist-switcher / inline-size;
 }
 
 // The trigger is a secondary button (UI kit): 40px, 10px radius, a 10%
@@ -134,5 +135,29 @@
 @media (prefers-reduced-transparency: reduce) {
     ::ng-deep .playlist-switcher-backdrop {
         backdrop-filter: none;
+    }
+}
+
+// Squeezed by a very narrow header (a tiling window), the trigger keeps
+// only the source's tile; the name stays its accessible name.
+@container playlist-switcher (max-width: 80px) {
+    .playlist-switcher-trigger {
+        position: relative;
+        justify-content: center;
+        gap: 0;
+        padding-inline: 0;
+    }
+
+    .playlist-info {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+    }
+
+    .dropdown-icon {
+        display: none;
     }
 }

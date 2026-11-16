@@ -14,6 +14,16 @@ import {
     restoreLiveSidebarState,
 } from './live-sidebar-state';
 
+const LEVEL_DEPTH: Record<LiveSidebarState, number> = {
+    expanded: 0,
+    'categories-hidden': 1,
+    collapsed: 2,
+};
+
+function deeper(a: LiveSidebarState, b: LiveSidebarState): LiveSidebarState {
+    return LEVEL_DEPTH[a] >= LEVEL_DEPTH[b] ? a : b;
+}
+
 function bySurface<T>(
     create: (surface: LiveSidebarSurface) => T
 ): Record<LiveSidebarSurface, T> {
@@ -39,12 +49,35 @@ function bySurface<T>(
  * derived flags rather than the raw state: the categories rail folds on
  * `areCategoriesHiddenFor(surface)`, the channels rail only on
  * `isCollapsedFor(surface)`.
+ *
+ * A layout too narrow for all its panels sets a fit level
+ * (`setFitLevel`): the panels then fold at least that far without touching
+ * the stored preference, which applies again once the window is wide. A
+ * choice made while narrow is kept for the session, for the narrow case
+ * only: it is what the user asked for at that width.
  */
 @Injectable({ providedIn: 'root' })
 export class LiveLayoutSidebarStateService {
+    /** The user's preference, persisted. */
     private readonly states: Record<
         LiveSidebarSurface,
         WritableSignal<LiveSidebarState>
+    >;
+    /** The fold the layout's width requires; `expanded` when it all fits. */
+    private readonly fitLevels = bySurface(() =>
+        signal<LiveSidebarState>('expanded')
+    );
+    /** A level chosen while narrow; session-only. */
+    private readonly narrowChoices = bySurface(() =>
+        signal<LiveSidebarState | null>(null)
+    );
+    private readonly narrowRestoreTargets = bySurface(
+        (): Exclude<LiveSidebarState, 'collapsed'> => 'categories-hidden'
+    );
+    /** What the layout shows. */
+    private readonly effective: Record<
+        LiveSidebarSurface,
+        Signal<LiveSidebarState>
     >;
     private readonly collapsed: Record<LiveSidebarSurface, Signal<boolean>>;
     private readonly categoriesHidden: Record<
@@ -65,11 +98,20 @@ export class LiveLayoutSidebarStateService {
         this.states = bySurface((surface) =>
             signal(restoreLiveSidebarState(liveSidebarStateStorageKey(surface)))
         );
+        this.effective = bySurface((surface) =>
+            computed(() => {
+                const fit = this.fitLevels[surface]();
+                const preferred = this.states[surface]();
+                return fit === 'expanded'
+                    ? preferred
+                    : (this.narrowChoices[surface]() ?? deeper(preferred, fit));
+            })
+        );
         this.collapsed = bySurface((surface) =>
-            computed(() => this.states[surface]() === 'collapsed')
+            computed(() => this.effective[surface]() === 'collapsed')
         );
         this.categoriesHidden = bySurface((surface) =>
-            computed(() => this.states[surface]() !== 'expanded')
+            computed(() => this.effective[surface]() !== 'expanded')
         );
         // A restored `categories-hidden` is what Cmd/Ctrl+B comes back to.
         this.restoreTargets = bySurface((surface) => {
@@ -78,8 +120,27 @@ export class LiveLayoutSidebarStateService {
         });
     }
 
+    /** The level shown, including a fold the width forces. */
     stateOf(surface: LiveSidebarSurface): Signal<LiveSidebarState> {
+        return this.effective[surface];
+    }
+
+    /** The stored preference, which a forced fold leaves alone. */
+    preferenceOf(surface: LiveSidebarSurface): Signal<LiveSidebarState> {
         return this.states[surface].asReadonly();
+    }
+
+    /**
+     * The least fold at which the layout still fits its player; `expanded`
+     * when everything fits (or the layout is gone).
+     */
+    setFitLevel(surface: LiveSidebarSurface, level: LiveSidebarState): void {
+        this.fitLevels[surface].set(level);
+    }
+
+    /** The width forces a fold, so level changes are session-only. */
+    isNarrow(surface: LiveSidebarSurface): boolean {
+        return this.fitLevels[surface]() !== 'expanded';
     }
 
     /** Stable per-surface signal; safe to assign to a component field. */
@@ -115,7 +176,12 @@ export class LiveLayoutSidebarStateService {
 
     /** Leaves `collapsed` for the level it was entered from. */
     expand(surface: LiveSidebarSurface): void {
-        this.setState(surface, this.restoreTargets[surface]);
+        this.setState(
+            surface,
+            this.isNarrow(surface)
+                ? this.narrowRestoreTargets[surface]
+                : this.restoreTargets[surface]
+        );
     }
 
     hideCategories(surface: LiveSidebarSurface): void {
@@ -127,6 +193,13 @@ export class LiveLayoutSidebarStateService {
     }
 
     setState(surface: LiveSidebarSurface, state: LiveSidebarState): void {
+        if (this.isNarrow(surface)) {
+            if (state !== 'collapsed') {
+                this.narrowRestoreTargets[surface] = state;
+            }
+            this.narrowChoices[surface].set(state);
+            return;
+        }
         if (state !== 'collapsed') {
             this.restoreTargets[surface] = state;
         }

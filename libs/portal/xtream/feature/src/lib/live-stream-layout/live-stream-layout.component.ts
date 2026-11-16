@@ -411,6 +411,7 @@ export class LiveStreamLayoutComponent
         ),
         categoryDropdownButton: this.categoryDropdownButton,
         restoreButton: this.restoreButton,
+        playerShown: computed(() => !!this.activeStreamUrl()),
     });
     readonly isSidebarCollapsed = this.livePanels.isSidebarCollapsed;
     readonly liveEpgPanelSummary = computed(() =>
