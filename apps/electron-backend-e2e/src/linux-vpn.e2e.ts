@@ -6,6 +6,7 @@ import {
     launchElectronApp,
     closeElectronApp,
     openSettings,
+    openSettingsSection,
     saveSettings,
     electronMainPath,
 } from './electron-test-fixtures';
@@ -109,10 +110,14 @@ test.describe('Linux app-only VPN', () => {
             );
             mkdirSync(artifacts, { recursive: true });
             for (const theme of ['LIGHT_THEME', 'DARK_THEME']) {
+                // Settings render one section page at a time; the shared
+                // form keeps the theme change staged across the switch.
+                await openSettingsSection(player.mainWindow, 'appearance');
                 await player.mainWindow
                     .getByTestId('select-theme')
                     .getByTestId(theme)
                     .click();
+                await openSettingsSection(player.mainWindow, 'general');
                 await expect(
                     player.mainWindow.getByTestId('vpn-connect')
                 ).toBeDisabled();
@@ -130,9 +135,10 @@ test.describe('Linux app-only VPN', () => {
             // The main form can become dirty while helper status is in flight.
             writeFileSync(join(binaryDir, 'hold-quit'), '');
             await player.mainWindow.getByTestId('vpn-connect').click();
+            // A control on the VPN's own section page, so the page stays.
             await player.mainWindow
-                .getByTestId('select-theme')
-                .getByTestId('LIGHT_THEME')
+                .getByTestId('strip-country-prefix-toggle')
+                .locator('button')
                 .click();
             await expect(
                 player.mainWindow.getByTestId('unsaved-dialog-stay')

@@ -990,7 +990,19 @@ export async function openSettingsSection(
     page: Page,
     sectionId: string
 ): Promise<void> {
-    await page.getByTestId(`settings-section-${sectionId}`).click();
+    const link = page.getByTestId(`settings-section-${sectionId}`);
+    // In a narrow window (a tiling window manager decides the size) the
+    // section list is in the phone layout's context drawer.
+    const drawerToggle = page.getByTestId('context-drawer-toggle');
+    // Its state, not the link's visibility: the link stays visible while
+    // the drawer closing after the previous switch slides out.
+    if (
+        (await drawerToggle.isVisible()) &&
+        (await drawerToggle.getAttribute('aria-expanded')) !== 'true'
+    ) {
+        await drawerToggle.click();
+    }
+    await link.click();
     await page.waitForURL(new RegExp(`/workspace/settings/${sectionId}$`));
 }
 

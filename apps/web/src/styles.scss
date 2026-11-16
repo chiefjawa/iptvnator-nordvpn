@@ -104,10 +104,60 @@
 }
 
 // Windows/Linux frameless title bar: reserve room in top-aligned drag
-// regions for the renderer-drawn window controls and application menu (4 × 46px buttons).
-// Body-level class so it also reaches cdk-overlay content (dialogs, menus).
+// regions for the renderer-drawn window controls and application menu
+// (4 buttons plus a 12px gap). Body-level class so it also reaches
+// cdk-overlay content (dialogs, menus); the controls read the button width.
+body.frameless-platform {
+    --app-window-control-width: 46px;
+    --app-window-controls-inset: calc(
+        4 * var(--app-window-control-width) + 12px
+    );
+}
+
 body.frameless-platform .workspace-header {
-    padding-right: 196px;
+    padding-right: var(--app-window-controls-inset);
+}
+
+// Narrow windows (a tiled half screen): the inset would leave the header too
+// little room for its buttons, so the controls get narrower and the
+// keyboard-shortcuts button goes, as on phones (the shortcut that opens the
+// same help stays) — the header's regions then fit beside the controls
+// instead of running under them.
+@media (max-width: 780px) {
+    body.frameless-platform {
+        --app-window-control-width: 40px;
+    }
+
+    body.frameless-platform .workspace-header {
+        gap: 6px;
+
+        .shortcuts-trigger {
+            display: none;
+        }
+    }
+}
+
+// At the phone breakpoint the rail becomes the top band, so the controls sit
+// over it instead of the header. The rail's host keeps their room outside
+// the sideways scroller, so neither a scrolled link nor the pinned Settings
+// link slides under them; the header below gets its phone inset back.
+@media (max-width: 640px) {
+    body.frameless-platform app-workspace-shell-rail {
+        padding-right: var(--app-window-controls-inset);
+        // Continues the rail's bottom border under the controls.
+        box-shadow: inset 0 -1px 0 var(--mat-sys-outline-variant);
+    }
+
+    body.frameless-platform .workspace-header {
+        padding-right: 8px;
+    }
+}
+
+@media (max-width: 640px) and (not (pointer: coarse)) {
+    // The strip beside the controls still moves the window, like the rail.
+    body.frameless-platform app-workspace-shell-rail {
+        app-region: drag;
+    }
 }
 
 // ─── Base ─────────────────────────────────────────────────────────────────────

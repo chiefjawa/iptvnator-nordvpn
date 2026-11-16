@@ -1055,9 +1055,17 @@ Layout integration:
 1. `document.body` gets a `frameless-platform` class (set in
    `AppComponent`, same mechanism as `dark-theme`) — body-level so rules
    also reach cdk-overlay content rendered outside `app-root`.
-2. `apps/web/src/styles.scss` reserves `padding-right: 196px` in
-   the top-aligned drag region (`.workspace-header`) for the 4 × 46px
-   menu and window-control button strip.
+2. `apps/web/src/styles.scss` reserves `--app-window-controls-inset`
+   (4 × `--app-window-control-width` + 12px: 196px, or 172px with 40px
+   buttons at ≤780px) for the menu and window-control button strip in the
+   top-aligned drag region: `.workspace-header` above the phone breakpoint,
+   the rail's host at ≤640px, where the rail is the top band (the inset sits
+   outside the rail's sideways scroller, so no link scrolls under the
+   controls). At ≤780px the header also drops the keyboard-shortcuts button
+   and its regions shrink to their floors, so its buttons fit beside the
+   controls. `window-controls.e2e.ts` ("controls never cover rail or header
+   buttons") sizes the viewport, not the window, so a tiling window manager
+   cannot skip it.
 3. Button colors follow the theme via CSS variables (`--app-on-surface`,
    `--app-hover-overlay`); the close button uses the Windows-style red
    hover (`#e81123`). No theme IPC is involved.
