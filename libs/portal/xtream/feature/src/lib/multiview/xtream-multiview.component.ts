@@ -10,6 +10,7 @@ import {
     viewChildren,
 } from '@angular/core';
 import { MatButtonModule } from '@angular/material/button';
+import { MatDialog } from '@angular/material/dialog';
 import { MatIcon } from '@angular/material/icon';
 import { RouterLink } from '@angular/router';
 import { TranslatePipe } from '@ngx-translate/core';
@@ -28,6 +29,7 @@ import {
     MultiviewChannel,
     MultiviewChannelPickerComponent,
 } from './multiview-channel-picker.component';
+import { MultiviewFocus } from './multiview-focus';
 import { createMultiviewLayouts } from './multiview-layouts.controller';
 import { MultiviewLayoutsMenuComponent } from './multiview-layouts-menu.component';
 import {
@@ -75,22 +77,28 @@ interface LiveStreamLike {
     providers: [MultiplexSessionService],
     templateUrl: './xtream-multiview.component.html',
     styleUrl: './xtream-multiview.component.scss',
+    host: { '(document:keydown)': 'onKeydown($event)' },
 })
 export class XtreamMultiviewComponent {
     private readonly xtreamStore = inject(XtreamStore);
     private readonly xtreamUrlService = inject(XtreamUrlService);
     private readonly settingsStore = inject(SettingsStore);
     private readonly session = inject(MultiplexSessionService);
+    private readonly dialog = inject(MatDialog);
     private readonly tileComponents = viewChildren(MultiviewTileComponent);
     private nextTileNumber = 1;
     private restoredFor: string | null = null;
 
     readonly maxTiles = MAX_TILES;
     readonly tiles = signal<MultiviewTile[]>([]);
-    readonly focusedId = signal<string | null>(null);
     /** Open picker: the tile being replaced, or 'new' for an added tile. */
     readonly pickerTarget = signal<string | null>(null);
     readonly statuses = this.session.statuses;
+    readonly focus = new MultiviewFocus(
+        computed(() => this.tiles().map((tile) => tile.id))
+    );
+    /** The tile with the sound. */
+    readonly focusedId = this.focus.focusedId;
 
     /** Tiles share one connection (setting on and the desktop shell has it). */
     readonly sharing = computed(
@@ -143,6 +151,13 @@ export class XtreamMultiviewComponent {
             PROGRESS_INTERVAL_MS
         );
         inject(DestroyRef).onDestroy(() => clearInterval(timer));
+    }
+
+    onKeydown(event: KeyboardEvent): void {
+        this.focus.handleKey(
+            event,
+            this.pickerTarget() !== null || this.dialog.openDialogs.length > 0
+        );
     }
 
     openPicker(target: string): void {

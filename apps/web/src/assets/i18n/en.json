@@ -1115,7 +1115,10 @@
         "NO_RESULTS": "No channels match",
         "MORE_RESULTS": "Showing the first {{count}} matches; keep typing to narrow down.",
         "EMPTY": "Add up to four live channels to watch them side by side.",
-        "UNMUTE_HINT": "Click a tile to hear it",
+        "UNMUTE_HINT": "Click a tile or press 1–4 to hear it",
+        "TILE_SOUND_HINT": "Click or press {{key}} to hear this tile; double-click or F to enlarge",
+        "ENLARGE_TILE": "Enlarge (F)",
+        "SHRINK_TILE": "Back to the grid (Esc)",
         "MODE_SHARED": "One shared connection",
         "MODE_DIRECT": "One connection per tile",
         "DIRECT_NOTICE": "Each tile uses its own connection. This account allows {{count}}.",
@@ -2355,6 +2358,10 @@
                 "COMMAND_PALETTE_NAVIGATION": "Move command palette selection",
                 "COMMAND_PALETTE_RUN": "Run selected command palette item",
                 "CLOSE_DIALOGS": "Close dialog or dismiss overlay",
+                "MULTIVIEW_SOUND": "Multiview: give tile 1–4 the sound",
+                "MULTIVIEW_ENLARGE": "Multiview: enlarge the tile with the sound, or back to the grid",
+                "MULTIVIEW_RESTORE": "Multiview: back to the grid",
+                "MULTIVIEW_MUTE": "Multiview: mute or unmute the tile with the sound",
                 "DOWNLOADS_OPEN_ITEM": "Open focused download item in the library",
                 "OPEN_PLAYLIST_SWITCHER": "Switch playlist"
             }

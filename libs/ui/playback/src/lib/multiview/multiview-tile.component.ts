@@ -48,6 +48,7 @@ type TileNotice =
     styleUrl: './multiview-tile.component.scss',
     host: {
         '[class.multiview-tile--focused]': 'focused()',
+        '[class.multiview-tile--enlarged]': 'enlarged()',
         '[attr.data-test-id]': '"multiview-tile"',
     },
 })
@@ -57,12 +58,20 @@ export class MultiviewTileComponent implements OnDestroy {
     readonly logo = input<string | null>(null);
     readonly playback = input<MultiviewTilePlayback | null>(null);
     readonly focused = input(false);
+    /** Its key in the multiview (1-4); 0 for none. */
+    readonly keyNumber = input(0);
+    /** Overrides the default of sound only on the focused tile. */
+    readonly muted = input<boolean | null>(null);
+    /** Fills the grid while the others shrink beside it. */
+    readonly enlarged = input(false);
+    readonly silent = computed(() => this.muted() ?? !this.focused());
     /** Scheduler state for a shared tile; null for a direct one. */
     readonly status = input<MultiplexTileStatus | null>(null);
 
     readonly focusRequested = output<void>();
     readonly replaceRequested = output<void>();
     readonly removeRequested = output<void>();
+    readonly enlargeRequested = output<void>();
 
     private readonly videoRef =
         viewChild.required<ElementRef<HTMLVideoElement>>('video');
@@ -123,7 +132,7 @@ export class MultiviewTileComponent implements OnDestroy {
     constructor() {
         effect(() => this.load(this.playback()));
         effect(() => {
-            this.videoRef().nativeElement.muted = !this.focused();
+            this.videoRef().nativeElement.muted = this.silent();
         });
         effect(() => this.noteSkip(this.status()?.skippedMs ?? 0));
     }

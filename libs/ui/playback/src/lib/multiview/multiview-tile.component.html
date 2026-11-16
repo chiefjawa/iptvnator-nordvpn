@@ -3,13 +3,20 @@
     class="multiview-tile__surface"
     [attr.aria-label]="title()"
     [attr.aria-pressed]="focused()"
+    [attr.aria-keyshortcuts]="keyNumber() || null"
+    [title]="
+        keyNumber()
+            ? ('MULTIVIEW.TILE_SOUND_HINT' | translate: { key: keyNumber() })
+            : title()
+    "
     (click)="focusRequested.emit()"
+    (dblclick)="enlargeRequested.emit()"
 >
     <video
         #video
         class="multiview-tile__video"
         playsinline
-        [muted]="!focused()"
+        [muted]="silent()"
         (playing)="onPlaying()"
         (waiting)="onWaiting()"
     ></video>
@@ -21,8 +28,26 @@
     }
     <span class="multiview-tile__title">{{ title() }}</span>
     <mat-icon class="multiview-tile__sound" aria-hidden="true">{{
-        focused() ? 'volume_up' : 'volume_off'
+        silent() ? 'volume_off' : 'volume_up'
     }}</mat-icon>
+    <button
+        type="button"
+        class="multiview-tile__action"
+        data-test-id="multiview-tile-enlarge"
+        [attr.aria-label]="
+            (enlarged() ? 'MULTIVIEW.SHRINK_TILE' : 'MULTIVIEW.ENLARGE_TILE')
+                | translate
+        "
+        [attr.aria-keyshortcuts]="enlarged() ? 'Escape' : 'F'"
+        [attr.aria-pressed]="enlarged()"
+        [title]="
+            (enlarged() ? 'MULTIVIEW.SHRINK_TILE' : 'MULTIVIEW.ENLARGE_TILE')
+                | translate
+        "
+        (click)="enlargeRequested.emit()"
+    >
+        <mat-icon>{{ enlarged() ? 'close_fullscreen' : 'open_in_full' }}</mat-icon>
+    </button>
     <button
         type="button"
         class="multiview-tile__action"

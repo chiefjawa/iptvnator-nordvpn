@@ -82,17 +82,22 @@
     <div
         class="multiview__grid"
         [attr.data-tiles]="tiles().length"
+        [attr.data-enlarged]="focus.enlargedId() ? '' : null"
         data-test-id="multiview-grid"
     >
-        @for (tile of tiles(); track tile.id) {
+        @for (tile of tiles(); track tile.id; let index = $index) {
             <app-multiview-tile
                 [tileId]="tile.id"
                 [title]="tile.channel.title"
                 [logo]="tile.channel.logo"
                 [playback]="tile.playback"
                 [focused]="focusedId() === tile.id"
+                [keyNumber]="index + 1"
+                [muted]="focus.isMuted(tile.id)"
+                [enlarged]="focus.enlargedId() === tile.id"
                 [status]="statuses().get(tile.id) ?? null"
-                (focusRequested)="focusedId.set(tile.id)"
+                (focusRequested)="focus.focus(tile.id)"
+                (enlargeRequested)="focus.toggleEnlarged(tile.id)"
                 (replaceRequested)="openPicker(tile.id)"
                 (removeRequested)="removeTile(tile.id)"
             />

@@ -164,6 +164,24 @@
     }
 }
 
+// The tile with the sound fills the grid; the others shrink into a strip
+// beside it and keep playing (hidden, a muted video may be paused by the
+// browser, and a shared tile must keep reporting real progress).
+.multiview__grid[data-enlarged] {
+    grid-template-columns: minmax(0, 1fr) minmax(112px, 18%);
+    grid-template-rows: repeat(3, minmax(0, 1fr));
+
+    > :not(.multiview-tile--enlarged) {
+        grid-column: 2;
+        grid-row: auto;
+    }
+
+    > .multiview-tile--enlarged {
+        grid-column: 1;
+        grid-row: 1 / -1;
+    }
+}
+
 // A narrow pane keeps every header control: "Add channel" and the mode pill
 // become icons, their text still the accessible name (and a tooltip).
 @container multiview (max-width: 479px) {
@@ -198,5 +216,21 @@
     .multiview__grid[data-tiles='2'] {
         grid-template-columns: 1fr;
         grid-template-rows: 1fr 1fr;
+    }
+
+    // In a tall pane the shrunk tiles sit in a row below the large one.
+    .multiview__grid[data-enlarged] {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-rows: minmax(0, 1fr) minmax(72px, 22%);
+
+        > :not(.multiview-tile--enlarged) {
+            grid-column: auto;
+            grid-row: 2;
+        }
+
+        > .multiview-tile--enlarged {
+            grid-column: 1 / -1;
+            grid-row: 1;
+        }
     }
 }

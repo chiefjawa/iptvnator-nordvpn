@@ -248,3 +248,62 @@ test('@ui @xtream multiview saves, switches, renames and deletes named layouts',
     await page.reload();
     await expect(tiles).toHaveCount(2);
 });
+
+test('@ui @xtream multiview keys move the sound, enlarge, restore and mute', async ({
+    page,
+}) => {
+    test.setTimeout(90_000);
+    const playlistPath = playlistPathOf(page.url());
+    await page.evaluate(
+        (key) => localStorage.setItem(key, JSON.stringify([10000, 10001, 10003])),
+        `iptvnator-multiview-channels:${playlistPath.split('/').pop()}`
+    );
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`${playlistPath}/live/multiview`);
+    const grid = page.locator('[data-test-id="multiview-grid"]');
+    const tiles = page.locator('app-multiview-tile');
+    await expect(tiles).toHaveCount(3);
+    await expect(tiles.nth(0)).toHaveClass(/multiview-tile--focused/);
+    await page.locator('.multiview__title').click();
+
+    await page.keyboard.press('2');
+    await expect(tiles.nth(1)).toHaveClass(/multiview-tile--focused/);
+    await expect(tiles.nth(1).locator('video')).toHaveJSProperty('muted', false);
+    await expect(tiles.nth(0).locator('video')).toHaveJSProperty('muted', true);
+
+    await page.keyboard.press('f');
+    await expect(grid).toHaveAttribute('data-enlarged', '');
+    await expect(tiles.nth(1)).toHaveClass(/multiview-tile--enlarged/);
+    const gridBox = await boxOf(grid);
+    const large = await boxOf(tiles.nth(1));
+    expect(large.width).toBeGreaterThan(gridBox.width * 0.7);
+    // The others shrink but stay on screen, inside the grid.
+    for (const index of [0, 2]) {
+        const small = await boxOf(tiles.nth(index));
+        expect(small.width).toBeGreaterThan(80);
+        expect(small.x).toBeGreaterThanOrEqual(large.x + large.width - 1);
+    }
+    // A number moves the sound and the enlarged place with it.
+    await page.keyboard.press('3');
+    await expect(tiles.nth(2)).toHaveClass(/multiview-tile--enlarged/);
+
+    await page.keyboard.press('m');
+    await expect(tiles.nth(2).locator('video')).toHaveJSProperty('muted', true);
+    await expect(tiles.nth(2).locator('.multiview-tile__sound')).toHaveText(
+        'volume_off'
+    );
+    await page.keyboard.press('m');
+    await expect(tiles.nth(2).locator('video')).toHaveJSProperty('muted', false);
+
+    await page.keyboard.press('Escape');
+    await expect(grid).not.toHaveAttribute('data-enlarged', '');
+
+    // Keys typed into the channel picker stay there.
+    await page.locator('[data-test-id="multiview-add-channel"]').click();
+    const search = page.locator('app-multiview-channel-picker input').first();
+    await search.click();
+    await page.keyboard.type('1f');
+    await expect(search).toHaveValue('1f');
+    await expect(tiles.nth(2)).toHaveClass(/multiview-tile--focused/);
+    await expect(grid).not.toHaveAttribute('data-enlarged', '');
+});

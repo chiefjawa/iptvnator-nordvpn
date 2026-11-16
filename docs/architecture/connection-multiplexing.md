@@ -53,6 +53,13 @@ and keeps up to 12 named layouts (`multiview-layouts.ts`); both store stream
 ids and names only, never URLs. Switching layouts keeps the tiles whose
 channel stays, so their shared-connection reserve is not thrown away.
 
+Keys (`multiview-keyboard.ts`, listed in the shortcuts help): `1`-`4` give a
+tile the sound, `F`/`Enter` enlarge it, `Escape` returns to the grid, `M`
+mutes it. They are bare keys, ignored in fields, dialogs, menus and the
+picker. An enlarged tile fills the grid while the others shrink into a
+strip beside it rather than being hidden: they keep playing and reporting
+progress, so the scheduler neither starves nor over-serves them.
+
 ## Invariants
 
 - **One connection per group.** A connection is closed, confirmed closed, and

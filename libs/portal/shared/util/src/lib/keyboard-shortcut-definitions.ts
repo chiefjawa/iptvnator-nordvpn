@@ -209,6 +209,40 @@ export const APP_KEYBOARD_SHORTCUTS: readonly KeyboardShortcutDefinition[] = [
         order: 60,
         electronOnly: true,
     },
+    // Xtream multiview (live/multiview); bare keys, so they never meet the
+    // shell's chords. No regular player is mounted on that screen.
+    {
+        id: 'multiview-sound',
+        group: 'playback',
+        labelKey: 'WORKSPACE.SHORTCUTS.ITEMS.MULTIVIEW_SOUND',
+        icon: 'grid_view',
+        keys: ['1-4'],
+        order: 70,
+    },
+    {
+        id: 'multiview-enlarge',
+        group: 'playback',
+        labelKey: 'WORKSPACE.SHORTCUTS.ITEMS.MULTIVIEW_ENLARGE',
+        icon: 'open_in_full',
+        keys: ['F', 'Enter'],
+        order: 71,
+    },
+    {
+        id: 'multiview-restore',
+        group: 'playback',
+        labelKey: 'WORKSPACE.SHORTCUTS.ITEMS.MULTIVIEW_RESTORE',
+        icon: 'close_fullscreen',
+        keys: ['Escape'],
+        order: 72,
+    },
+    {
+        id: 'multiview-mute',
+        group: 'playback',
+        labelKey: 'WORKSPACE.SHORTCUTS.ITEMS.MULTIVIEW_MUTE',
+        icon: 'volume_off',
+        keys: ['M'],
+        order: 73,
+    },
     {
         id: 'command-palette-navigation',
         group: 'dialogs',
