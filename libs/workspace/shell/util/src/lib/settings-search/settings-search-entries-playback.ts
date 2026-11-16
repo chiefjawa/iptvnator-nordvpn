@@ -74,6 +74,22 @@ export const PLAYBACK_SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] =
             fallbackId: 'video-player',
         },
         {
+            id: 'connection-multiplexing',
+            section: 'playback',
+            labelKey: 'SETTINGS.CONNECTION_MULTIPLEXING',
+            descriptionKey: 'SETTINGS.CONNECTION_MULTIPLEXING_DESCRIPTION',
+            keywords: [
+                'multiview',
+                'multi',
+                'connection',
+                'multiplex',
+                'tiles',
+                'split',
+            ],
+            requires: ['desktop'],
+            fallbackId: 'video-player',
+        },
+        {
             id: 'mpv-player-path',
             section: 'playback',
             labelKey: 'SETTINGS.MPV_PLAYER_PATH_LABEL',

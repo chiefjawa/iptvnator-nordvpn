@@ -1,0 +1,142 @@
+@use '../../../../../../ui/styles/app-controls' as controls;
+
+:host {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    color: var(--app-on-surface);
+    background: var(--app-content-bg);
+}
+
+.multiview__header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--app-widget-border);
+    background: var(--app-header-bg);
+}
+
+.multiview__back {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    color: inherit;
+    text-decoration: none;
+
+    &:hover {
+        background: var(--app-card-hover-bg);
+    }
+
+    &:focus-visible {
+        outline: 2px solid var(--app-focus-ring, var(--app-selection-color));
+    }
+}
+
+.multiview__title {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.multiview__mode {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border: 1px solid var(--app-widget-border);
+    border-radius: 999px;
+    color: var(--app-eyebrow-color);
+    font-size: 12px;
+
+    mat-icon {
+        width: 14px;
+        height: 14px;
+        font-size: 14px;
+    }
+}
+
+.multiview__mode--shared {
+    border-color: var(--app-selection-border, var(--app-selection-color));
+    color: var(--app-on-surface);
+    background: var(--app-selection-surface);
+}
+
+.multiview__spacer {
+    flex: 1;
+}
+
+.multiview__add {
+    @include controls.accent-button;
+
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.multiview__notice {
+    margin: 0;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--app-widget-border);
+    color: var(--app-eyebrow-color);
+    font-size: 13px;
+}
+
+.multiview__empty {
+    display: grid;
+    flex: 1;
+    align-content: center;
+    justify-items: center;
+    gap: 12px;
+    padding: 24px;
+    color: var(--app-eyebrow-color);
+    text-align: center;
+
+    > mat-icon {
+        width: 48px;
+        height: 48px;
+        font-size: 48px;
+    }
+
+    p {
+        max-width: 420px;
+        margin: 0;
+    }
+}
+
+.multiview__empty-hint {
+    font-size: 13px;
+}
+
+.multiview__grid {
+    display: grid;
+    flex: 1;
+    gap: 6px;
+    min-height: 0;
+    padding: 6px;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+
+    &[data-tiles='1'] {
+        grid-template-columns: 1fr;
+        grid-template-rows: 1fr;
+    }
+
+    &[data-tiles='2'] {
+        grid-template-rows: 1fr;
+    }
+
+    // One large tile on the left, two stacked on the right.
+    &[data-tiles='3'] {
+        grid-template-columns: 2fr 1fr;
+
+        > :first-child {
+            grid-row: span 2;
+        }
+    }
+}

@@ -300,6 +300,31 @@
                         </div>
                     </div>
                 }
+
+                <div
+                    class="setting-item"
+                    data-setting-id="connection-multiplexing"
+                    data-test-id="connection-multiplexing-setting"
+                >
+                    <div class="setting-item__meta">
+                        <h4 id="connection-multiplexing-label">
+                            {{ 'SETTINGS.CONNECTION_MULTIPLEXING' | translate }}
+                        </h4>
+                        <p>
+                            {{
+                                'SETTINGS.CONNECTION_MULTIPLEXING_DESCRIPTION'
+                                    | translate
+                            }}
+                        </p>
+                    </div>
+                    <div class="setting-item__control setting-item__toggle">
+                        <mat-slide-toggle
+                            formControlName="connectionMultiplexing"
+                            aria-labelledby="connection-multiplexing-label"
+                            data-test-id="connection-multiplexing-toggle"
+                        ></mat-slide-toggle>
+                    </div>
+                </div>
             }
 
             @if (

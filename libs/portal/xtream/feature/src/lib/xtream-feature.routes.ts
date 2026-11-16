@@ -25,6 +25,11 @@ const loadLiveStreamLayoutComponent: ComponentLoader = () =>
         (c) => c.LiveStreamLayoutComponent
     );
 
+const loadXtreamMultiviewComponent: ComponentLoader = () =>
+    import('./multiview/xtream-multiview.component').then(
+        (c) => c.XtreamMultiviewComponent
+    );
+
 const loadCategoryContentViewComponent: ComponentLoader = () =>
     import('@iptvnator/portal/catalog/feature').then(
         (c) => c.CategoryContentViewComponent
@@ -83,6 +88,12 @@ export function createXtreamRoutes(): Route[] {
                         {
                             path: 'live',
                             loadComponent: loadLiveStreamLayoutComponent,
+                        },
+                        {
+                            // Before `live/:categoryId`, which would
+                            // otherwise read "multiview" as a category.
+                            path: 'live/multiview',
+                            loadComponent: loadXtreamMultiviewComponent,
                         },
                         {
                             path: 'live/:categoryId',

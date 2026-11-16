@@ -1,0 +1,75 @@
+<div class="multiview-picker__backdrop" (click)="closed.emit()"></div>
+
+<div
+    class="multiview-picker"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="multiview-picker-title"
+    data-test-id="multiview-channel-picker"
+>
+    <header class="multiview-picker__header">
+        <h2 id="multiview-picker-title">
+            {{ 'MULTIVIEW.PICK_CHANNEL' | translate }}
+        </h2>
+        <button
+            type="button"
+            class="multiview-picker__close"
+            [attr.aria-label]="'MULTIVIEW.CLOSE_PICKER' | translate"
+            (click)="closed.emit()"
+        >
+            <mat-icon>close</mat-icon>
+        </button>
+    </header>
+
+    <label class="multiview-picker__search">
+        <mat-icon aria-hidden="true">search</mat-icon>
+        <input
+            #search
+            type="search"
+            autocomplete="off"
+            spellcheck="false"
+            data-test-id="multiview-channel-search"
+            [attr.aria-label]="'MULTIVIEW.SEARCH_PLACEHOLDER' | translate"
+            [placeholder]="'MULTIVIEW.SEARCH_PLACEHOLDER' | translate"
+            [value]="term()"
+            (input)="onSearch($event)"
+        />
+    </label>
+
+    <ul class="multiview-picker__list">
+        @for (channel of results(); track channel.xtreamId) {
+            <li>
+                <button
+                    type="button"
+                    class="multiview-picker__row"
+                    data-test-id="multiview-channel-option"
+                    (click)="picked.emit(channel)"
+                >
+                    @if (channel.logo) {
+                        <img
+                            class="multiview-picker__logo"
+                            loading="lazy"
+                            alt=""
+                            [src]="channel.logo"
+                        />
+                    } @else {
+                        <mat-icon class="multiview-picker__logo" aria-hidden="true"
+                            >live_tv</mat-icon
+                        >
+                    }
+                    <span class="multiview-picker__name">{{ channel.title }}</span>
+                </button>
+            </li>
+        } @empty {
+            <li class="multiview-picker__empty">
+                {{ 'MULTIVIEW.NO_RESULTS' | translate }}
+            </li>
+        }
+    </ul>
+
+    @if (truncated()) {
+        <p class="multiview-picker__more">
+            {{ 'MULTIVIEW.MORE_RESULTS' | translate: { count: limit } }}
+        </p>
+    }
+</div>

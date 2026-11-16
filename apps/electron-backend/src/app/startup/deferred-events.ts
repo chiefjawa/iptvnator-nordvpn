@@ -53,6 +53,11 @@ import { databaseWorkerClient } from '../services/database-worker-client';
 import type { bootstrapWindowCloseGuard } from '../services/window-close-guard.service';
 import { scheduleDeferredFixPath } from './login-shell-path';
 import { registerSourceSyncEvents } from '../events/source-sync.events';
+import {
+    registerMultiplexHandlers,
+    shutdownMultiplex,
+} from '../events/multiplex.events';
+import { runBurstProbeFromEnv } from '../multiplex/probe/burst-probe-runner';
 
 export { scheduleDeferredFixPath };
 
@@ -97,6 +102,7 @@ export function bootstrapDeferredEvents(
     registerM3uSourceProbe();
     registerSourceProbeCancellation();
     registerConnectivityGuardHandlers();
+    registerMultiplexHandlers();
     registerSourceSyncEvents(shutdownDeferredServices);
     DatabaseEvents.bootstrapDatabaseEvents();
     EpgEvents.bootstrapEpgEvents();
@@ -129,6 +135,9 @@ export async function finishStartupAfterFirstLoad(): Promise<void> {
     await reconcileStaleRecordings();
 
     traceStartupPhase('reconcile-stale-recordings:done');
+
+    // Developer-only and opt-in through the environment; a no-op otherwise.
+    void runBurstProbeFromEnv();
 }
 
 /** Tears down sessions and the DB worker; safe when nothing was started. */
@@ -136,6 +145,7 @@ export function shutdownDeferredServices(): void {
     shutdownEmbeddedMpv();
     shutdownMpvSession();
     shutdownVlcSession();
+    shutdownMultiplex();
     void databaseWorkerClient.shutdown();
 }
 

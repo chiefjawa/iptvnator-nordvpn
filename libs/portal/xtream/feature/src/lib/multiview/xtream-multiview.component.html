@@ -1,0 +1,94 @@
+<header class="multiview__header">
+    <a
+        class="multiview__back"
+        routerLink=".."
+        data-test-id="multiview-back"
+        [attr.aria-label]="'MULTIVIEW.BACK' | translate"
+        [title]="'MULTIVIEW.BACK' | translate"
+    >
+        <mat-icon>arrow_back</mat-icon>
+    </a>
+    <h1 class="multiview__title">{{ 'MULTIVIEW.TITLE' | translate }}</h1>
+
+    <span
+        class="multiview__mode"
+        [class.multiview__mode--shared]="sharing()"
+        data-test-id="multiview-mode"
+    >
+        <mat-icon aria-hidden="true">{{ sharing() ? 'hub' : 'lan' }}</mat-icon>
+        {{
+            (sharing() ? 'MULTIVIEW.MODE_SHARED' : 'MULTIVIEW.MODE_DIRECT')
+                | translate
+        }}
+    </span>
+
+    <span class="multiview__spacer"></span>
+
+    <button
+        type="button"
+        class="multiview__add"
+        data-test-id="multiview-add-channel"
+        [disabled]="!canAdd()"
+        (click)="openPicker('new')"
+    >
+        <mat-icon aria-hidden="true">add</mat-icon>
+        {{ 'MULTIVIEW.ADD_CHANNEL' | translate }}
+    </button>
+</header>
+
+@if (!sharing() && tiles().length > 1) {
+    <p class="multiview__notice" role="note" data-test-id="multiview-direct-notice">
+        {{ 'MULTIVIEW.DIRECT_NOTICE_UNKNOWN' | translate }}
+        @if (canEnableSharing()) {
+            {{ 'MULTIVIEW.ENABLE_SHARING_HINT' | translate }}
+        }
+    </p>
+}
+
+@if (tiles().length === 0) {
+    <div class="multiview__empty">
+        <mat-icon aria-hidden="true">grid_view</mat-icon>
+        <p>{{ 'MULTIVIEW.EMPTY' | translate }}</p>
+        @if (canEnableSharing()) {
+            <p class="multiview__empty-hint">
+                {{ 'MULTIVIEW.ENABLE_SHARING_HINT' | translate }}
+            </p>
+        }
+        <button
+            type="button"
+            class="multiview__add"
+            (click)="openPicker('new')"
+        >
+            <mat-icon aria-hidden="true">add</mat-icon>
+            {{ 'MULTIVIEW.ADD_CHANNEL' | translate }}
+        </button>
+    </div>
+} @else {
+    <div
+        class="multiview__grid"
+        [attr.data-tiles]="tiles().length"
+        data-test-id="multiview-grid"
+    >
+        @for (tile of tiles(); track tile.id) {
+            <app-multiview-tile
+                [tileId]="tile.id"
+                [title]="tile.channel.title"
+                [logo]="tile.channel.logo"
+                [playback]="tile.playback"
+                [focused]="focusedId() === tile.id"
+                [status]="statuses().get(tile.id) ?? null"
+                (focusRequested)="focusedId.set(tile.id)"
+                (replaceRequested)="openPicker(tile.id)"
+                (removeRequested)="removeTile(tile.id)"
+            />
+        }
+    </div>
+}
+
+@if (pickerTarget()) {
+    <app-multiview-channel-picker
+        [channels]="channels()"
+        (picked)="onPicked($event)"
+        (closed)="pickerTarget.set(null)"
+    />
+}

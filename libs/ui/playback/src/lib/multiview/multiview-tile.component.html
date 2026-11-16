@@ -1,0 +1,59 @@
+<button
+    type="button"
+    class="multiview-tile__surface"
+    [attr.aria-label]="title()"
+    [attr.aria-pressed]="focused()"
+    (click)="focusRequested.emit()"
+>
+    <video
+        #video
+        class="multiview-tile__video"
+        playsinline
+        [muted]="!focused()"
+        (playing)="onPlaying()"
+        (waiting)="onWaiting()"
+    ></video>
+</button>
+
+<div class="multiview-tile__bar">
+    @if (logo(); as logoUrl) {
+        <img class="multiview-tile__logo" [src]="logoUrl" alt="" />
+    }
+    <span class="multiview-tile__title">{{ title() }}</span>
+    <mat-icon class="multiview-tile__sound" aria-hidden="true">{{
+        focused() ? 'volume_up' : 'volume_off'
+    }}</mat-icon>
+    <button
+        type="button"
+        class="multiview-tile__action"
+        data-test-id="multiview-tile-replace"
+        [attr.aria-label]="'MULTIVIEW.REPLACE_CHANNEL' | translate"
+        [title]="'MULTIVIEW.REPLACE_CHANNEL' | translate"
+        (click)="replaceRequested.emit()"
+    >
+        <mat-icon>swap_horiz</mat-icon>
+    </button>
+    <button
+        type="button"
+        class="multiview-tile__action"
+        data-test-id="multiview-tile-remove"
+        [attr.aria-label]="'MULTIVIEW.REMOVE_TILE' | translate"
+        [title]="'MULTIVIEW.REMOVE_TILE' | translate"
+        (click)="removeRequested.emit()"
+    >
+        <mat-icon>close</mat-icon>
+    </button>
+</div>
+
+@if (noticeKey(); as key) {
+    <div
+        class="multiview-tile__notice"
+        [class.multiview-tile__notice--problem]="
+            notice() === 'error' || notice() === 'unsupported'
+        "
+        role="status"
+        data-test-id="multiview-tile-notice"
+    >
+        {{ key | translate: noticeParams() }}
+    </div>
+}

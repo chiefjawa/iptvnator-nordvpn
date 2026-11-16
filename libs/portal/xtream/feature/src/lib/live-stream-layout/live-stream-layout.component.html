@@ -88,6 +88,9 @@
                     <mat-icon>list_alt</mat-icon>
                 </button>
             }
+            <app-multiview-entry-button
+                [label]="'MULTIVIEW.OPEN' | translate"
+            />
             <button
                 mat-icon-button
                 [matMenuTriggerFor]="channelSortMenu"
@@ -213,6 +216,10 @@
                             }}
                         </div>
                     </div>
+                    <app-multiview-entry-button
+                        class="live-root-multiview"
+                        [label]="'MULTIVIEW.OPEN' | translate"
+                    />
                 </div>
                 <app-grid-list
                     class="live-all-items-grid app-scrollbar"

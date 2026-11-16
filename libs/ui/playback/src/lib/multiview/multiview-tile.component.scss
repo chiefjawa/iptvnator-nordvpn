@@ -1,0 +1,133 @@
+:host {
+    position: relative;
+    display: block;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    border-radius: 10px;
+    background: #000;
+    outline: 2px solid transparent;
+    outline-offset: -2px;
+    transition: outline-color 120ms ease;
+}
+
+:host(.multiview-tile--focused) {
+    outline-color: var(--app-selection-color);
+}
+
+.multiview-tile__surface {
+    display: block;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+
+    &:focus-visible {
+        outline: 2px solid var(--app-focus-ring, var(--app-selection-color));
+        outline-offset: -4px;
+    }
+}
+
+.multiview-tile__video {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #000;
+}
+
+// Title and actions sit on the picture, so they use fixed light-on-dark
+// colours rather than theme surface tokens.
+.multiview-tile__bar {
+    position: absolute;
+    inset: 0 0 auto 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 8px 20px 12px;
+    color: #fff;
+    background: linear-gradient(rgba(0, 0, 0, 0.72), rgba(0, 0, 0, 0));
+    opacity: 0;
+    transition: opacity 120ms ease;
+    pointer-events: none;
+}
+
+:host(:hover) .multiview-tile__bar,
+:host(:focus-within) .multiview-tile__bar,
+:host(.multiview-tile--focused) .multiview-tile__bar {
+    opacity: 1;
+}
+
+.multiview-tile__logo {
+    width: 28px;
+    height: 28px;
+    object-fit: contain;
+    flex: none;
+}
+
+.multiview-tile__title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    font-size: 13px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.multiview-tile__sound {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    font-size: 18px;
+    opacity: 0.85;
+}
+
+.multiview-tile__action {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    color: inherit;
+    background: rgba(255, 255, 255, 0.14);
+    cursor: pointer;
+    pointer-events: auto;
+
+    &:hover {
+        background: rgba(255, 255, 255, 0.28);
+    }
+
+    &:focus-visible {
+        outline: 2px solid #fff;
+        outline-offset: 1px;
+    }
+
+    mat-icon {
+        width: 18px;
+        height: 18px;
+        font-size: 18px;
+    }
+}
+
+.multiview-tile__notice {
+    position: absolute;
+    left: 12px;
+    bottom: 12px;
+    max-width: calc(100% - 24px);
+    padding: 4px 10px;
+    border-radius: 999px;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.72);
+    font-size: 12px;
+    pointer-events: none;
+}
+
+.multiview-tile__notice--problem {
+    background: rgba(160, 30, 30, 0.9);
+}

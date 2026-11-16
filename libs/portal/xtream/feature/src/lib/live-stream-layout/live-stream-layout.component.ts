@@ -114,6 +114,8 @@ import {
     type XtreamLiveChannelItem,
 } from './xtream-live-channel-navigation.service';
 
+import { MultiviewEntryButtonComponent } from '../multiview/multiview-entry-button.component';
+
 const LIVE_CHANNEL_SORT_STORAGE_KEY = 'xtream-live-channel-sort-mode';
 
 @Component({
@@ -131,6 +133,7 @@ const LIVE_CHANNEL_SORT_STORAGE_KEY = 'xtream-live-channel-sort-mode';
         },
     ],
     imports: [
+        MultiviewEntryButtonComponent,
         EpgListViewComponent,
         EpgTimelineComponent,
         MatButtonModule,

@@ -266,6 +266,8 @@ export const SettingsStore = signalStore(
                         store.portalConnectivityGuard?.() !== false,
                     embeddedMpvAutoReconnect:
                         store.embeddedMpvAutoReconnect?.() !== false,
+                    connectionMultiplexing:
+                        store.connectionMultiplexing?.() === true,
                     coverSize:
                         store.coverSize?.() ?? DEFAULT_SETTINGS.coverSize,
                     showCoverTitles: store.showCoverTitles?.() !== false,

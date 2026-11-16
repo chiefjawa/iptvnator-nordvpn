@@ -1,4 +1,5 @@
 import { createAppMenuListener } from './app-menu-listener';
+import { createMultiplexApi } from './multiplex-preload';
 import type {
     ElectronBridgeFavoriteReorderUpdate,
     XtreamFavoriteRemovalRef,
@@ -303,6 +304,7 @@ const frameZoomPorts = {
 };
 
 const electronApi: ElectronBridgeApi = {
+    ...createMultiplexApi(ipcRenderer),
     onAppMenuAction: createAppMenuListener(ipcRenderer),
     sourceSyncConnection: () => {
         const result = ipcRenderer.sendSync(SOURCE_SYNC_CONNECTION);

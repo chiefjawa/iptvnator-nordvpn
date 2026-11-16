@@ -119,3 +119,12 @@ the helper/daemon and a real account token: compare host/app egress, confirm a
 player's namespace, interrupt its tunnel and verify traffic stays blocked, then
 close the app and confirm the host route is unchanged. Never report mocked tests
 as proof that those live network checks passed.
+
+## Loopback media relay
+
+Connection multiplexing ([contract](connection-multiplexing.md)) runs a
+127.0.0.1 HTTP relay in the player process to hand multiview tiles their
+stream. It is media plumbing between the main process and its own renderer,
+not a routing mechanism: its upstream requests are ordinary main-process
+requests and leave through the namespace like all others. It is separate from
+the LAN remote-control server, which stays disabled in a VPN session.

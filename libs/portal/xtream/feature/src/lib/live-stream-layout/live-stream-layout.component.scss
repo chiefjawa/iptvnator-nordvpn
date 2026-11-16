@@ -54,6 +54,11 @@
     @include panel.standard-panel-meta();
 }
 
+// Multiview entry on the landing grid, pushed to the header's far end.
+.live-root-multiview {
+    margin-left: auto;
+}
+
 .category-title {
     @include panel.standard-panel-title();
 }

@@ -257,6 +257,12 @@ export interface Settings {
      * Captured per session, so a change applies to the next session.
      */
     embeddedMpvAutoReconnect?: boolean;
+    /**
+     * Multiview: tiles of one playlist take turns on a single provider
+     * connection instead of opening one each. Experimental, default off.
+     * Read when a multiview opens; single-channel playback never uses it.
+     */
+    connectionMultiplexing?: boolean;
     /** Desktop Xtream/Stalker request cooldown. Default on; applies on Save. */
     portalConnectivityGuard?: boolean;
     /** Cover/poster sizing preset applied across grids and rails */
