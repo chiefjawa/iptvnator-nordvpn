@@ -99,49 +99,66 @@ starting on the keyframe after the depth) and require every revisit in the
 first minute to overlap by at least one GOP, for two to four tiles. There is no Electron E2E yet;
 the feature was validated over CDP against a real provider.
 
-## Standalone LAN relay (trial)
+## Standalone LAN relay
 
 `multiplex/lan-relay/` is a plain-Node program built from the same engine
-(`pnpm nx run electron-backend:build-multiplex-relay`, then
-`node dist/apps/multiplex-relay/main.js --config <file>`; see its README).
-It serves configured channels to players on the home network that cannot
+(`pnpm nx run electron-backend:build-multiplex-relay`; see its README for
+config and endpoints). It serves players on the home network that cannot
 report their buffer, such as ExoPlayer-based TV apps, through one provider
-connection. It lives in the `electron-backend` project because Nx does not
-let one app import another, and the engine has no Electron imports; the
-bundle fails to build if `electron` is ever pulled in.
+connection, behind an Xtream-compatible front so a player's existing
+Xtream playlist can be re-pointed at it with its favourites (stream ids are
+the provider's). It lives in the `electron-backend` project because Nx does
+not let one app import another, and the engine has no Electron imports; the
+bundle fails to build if `electron` is ever pulled in. The protected service
+launch (own NordVPN namespace, unix socket, host forwarder) is described in
+`tools/multiplex-relay/INTERFACE.md`.
 
-- **One group.** Every configured channel is a tile of one
-  `GroupScheduler`, with the invariants above unchanged. The relay's opener
-  also counts open connections and refuses to open a second one itself.
+- **One connection, live and VOD.** Every provider stream request passes
+  `UpstreamGate`, which admits one at a time and is released only when the
+  socket is confirmed closed; its peak is in `/status` (`upstream.gate`).
+  API requests (`player_api.php`, `xmltv.php`) are not stream connections
+  on Xtream panels and do not pass it; they run at most two at once.
+- **Live.** Any stream id may be requested; every live channel is a tile of
+  one `GroupScheduler`, with the invariants above unchanged. At most
+  `maxLiveChannels` (4); a request beyond gets 503 after unwatched
+  channels are evicted. A channel left by a zap (same address asks for
+  another channel within 2 s) keeps 1 s of grace instead of 8 s.
 - **The relay holds the reserve.** Each tile's spliced output is queued as
-  whole segments (PAT, PMT, keyframe onward). The reserve reported to the
-  scheduler, every 500 ms, is the slowest client's queued-but-unsent media
-  plus its estimated player cushion; a tile with no clients reports its
-  queue length without draining.
-- **Paced output.** A client gets `fastStartSec` (3 s) at once, then media
-  at real time, at `overdrive` (1.02) while its estimated cushion is under
-  `targetCushionSec` (6 s). After a dry spell at most one fast start is
-  sent at once.
-- **Keep-alive.** With nothing to send, 4 null packets (PID 0x1FFF) go out
-  after every 300 ms of silence, so the socket never goes quiet; dry spells
-  are counted.
-- **Backpressure and memory.** A client whose socket is full is paused (not
-  even keep-alive is written) until it drains. Queues are capped at 120 s or
-  64 MB per channel and 256 MB together; the oldest segment is dropped, and
-  a client still on it skips ahead to the next segment start (a
-  `backpressureDrop`).
-- **Clients.** The first request for a stream id creates its tile; more
-  clients for it share the queue. A client joining a running tile, or
-  reconnecting within the 8 s grace period after the last one left, starts
-  on the segment `joinBacklogSec` (3 s) before the queue's end. After the
-  grace the tile is removed.
+  whole segments. The reserve reported to the scheduler every 500 ms is the
+  slowest client's unsent media plus its estimated player cushion.
+- **Paced output and keep-alive** (proven on a real TV; not retuned):
+  `fastStartSec` 3, then real time at `overdrive` 1.02 below
+  `targetCushionSec` 6; null packets after 300 ms of silence;
+  backpressure pauses; queues capped at 120 s / 64 MB per channel and
+  256 MB together.
+- **Robustness.** A connection that delivers nothing for 20 s is dropped
+  (a dead tunnel often leaves a silent socket), the scheduler backs off;
+  clients of a channel without media for 60 s are ended cleanly once
+  their queue is empty, and reconnect on their own.
+- **VOD and catch-up** are byte proxies with Range/HEAD and the same
+  validated-redirect policy. They need the connection exclusively: with no
+  live clients, unwatched channels are dropped and the movie proceeds; with
+  live clients `vodPolicy: "refuse"` answers 503, `"preempt"` suspends the
+  rotation and resumes it after the movie. While a movie session exists new
+  live requests get 503. Requests for the same item from the same address
+  form one session: a newer range cancels the older upstream request and
+  waits for its socket to close; the same address asking for another item
+  replaces the session; another address gets 503. The session ends 3 s
+  after its last request.
+- **No provider leaks.** Answers are sanitized into templates when fetched
+  (stream URLs rewritten to the relay, `direct_source` and other provider
+  URLs blanked, host/account in free text replaced) and only templates are
+  cached. The guide is scrubbed while streaming and stored gzip. Response
+  headers from the provider are never forwarded except a fixed byte-range
+  set for VOD.
 
-Limits: the cushion is an estimate (the relay cannot see the player); a
-joiner starts with only `joinBacklogSec` of relay-side reserve, so the
-scheduler serves it next; a skip over dropped media is a timestamp and
-continuity jump the player must absorb; there is no transcoding, HLS or
-catch-up. Validated with synthetic specs (`lan-relay*.spec.ts`: two and
-three channels on the deep-burst fake provider, fan-out, grace, backpressure,
-memory cap, secret-free logs, real-socket HTTP) and with ffmpeg on real
-H.264/AAC served through a file-backed fake provider; not yet on a real
-player.
+Limits: N live channels **or** one movie/catch-up at a time; MPEG-TS only
+(no HLS); the cushion is an estimate; credentials shorter than 6
+characters are only scrubbed inside URLs; provider-hosted artwork is
+blanked, not proxied; `get.php` lists live channels and movies, not series
+episodes. Validated with synthetic specs (`lan-relay*.spec.ts`,
+`relay-front.spec.ts` with a leak sweep over every endpoint and header,
+`relay-vod.spec.ts`, `lan-relay-admission.spec.ts`) against the fake
+provider and `testing/fake-panel.ts`, and live on a Fire TV (TiviMate,
+two-channel multiview, 9 min, no skips or reconnects) before the Xtream
+front was added.

@@ -6,6 +6,30 @@ const esbuild = require('esbuild');
 const path = require('path');
 
 const root = path.join(__dirname, '../..');
+const { execFileSync } = require('child_process');
+
+/** Version and commit shown by `--version` and `/status`. */
+function buildInfo() {
+    let commit = 'unknown';
+    try {
+        commit = execFileSync('git', ['rev-parse', '--short=10', 'HEAD'], {
+            cwd: root,
+            encoding: 'utf8',
+        }).trim();
+        const dirty = execFileSync('git', ['status', '--porcelain'], {
+            cwd: root,
+            encoding: 'utf8',
+        }).trim();
+        if (dirty) {
+            commit += '-dirty';
+        }
+    } catch {
+        // Not a git checkout.
+    }
+    const { version } = require(path.join(root, 'package.json'));
+    return { version: String(version), commit };
+}
+const info = buildInfo();
 // A scratch build (for example a test of the launcher) can go elsewhere.
 const outdir =
     process.env.MULTIPLEX_RELAY_OUTDIR ||
@@ -27,6 +51,10 @@ esbuild
         format: 'cjs',
         outdir,
         tsconfig: path.join(root, 'tsconfig.base.json'),
+        define: {
+            RELAY_VERSION: JSON.stringify(info.version),
+            RELAY_COMMIT: JSON.stringify(info.commit),
+        },
         // Electron must never be pulled in; fail the build if it is.
         plugins: [
             {

@@ -2,11 +2,19 @@
     "serverUrl": "http://provider.example.test:8080",
     "username": "example-user",
     "password": "example-password",
-    "listen": "0.0.0.0:8790",
     "token": "replace-with-a-long-random-token-0123456789",
-    "channels": [
-        { "streamId": 1001, "name": "Example Channel A" },
-        { "streamId": 1002, "name": "Example Channel B" }
-    ],
+    "clients": [{ "username": "living-room", "password": "replace-local-pass" }],
+    "listen": "0.0.0.0:8790",
+    "maxLiveChannels": 4,
+    "vodPolicy": "refuse",
+    "cacheDir": "/home/example/.cache/iptv-relay",
+    "cache": {
+        "catalogueTtlSec": 21600,
+        "shortTtlSec": 60,
+        "loginTtlSec": 300,
+        "xmltvTtlSec": 43200,
+        "maxCacheMb": 1024
+    },
+    "lan": { "listen": "0.0.0.0:8790", "allowFrom": ["192.168.1.0/24"] },
     "userAgent": "VLC/3.0.18 LibVLC/3.0.18"
 }
