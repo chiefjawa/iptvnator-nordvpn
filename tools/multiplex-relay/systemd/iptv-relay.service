@@ -1,0 +1,57 @@
+# IPTV LAN relay inside its own NordVPN WireGuard namespace (systemd USER unit).
+#
+# Template: tools/multiplex-relay/systemd/install.sh replaces @NODE@ and @REPO@
+# and writes the result to ~/.config/systemd/user/. Edit this template and
+# re-run the installer; do not edit the installed copy.
+#
+# No secrets here. The env file only names where the private relay config
+# lives (MULTIPLEX_RELAY_CONFIG) and which VPN region to use.
+[Unit]
+Description=IPTV LAN relay (one provider connection, through NordVPN)
+Documentation=file://@REPO@/docs/architecture/multiplex-relay-operations.md
+Documentation=file://@REPO@/tools/multiplex-relay/INTERFACE.md
+# A user manager has no network-online.target (it is a system unit, and a
+# user unit cannot be ordered after system units), so these two lines are
+# harmless no-ops there. The launcher does the real wait itself: up to 2 min
+# for the vopono daemon and up to 5 min for internet access.
+After=network-online.target
+Wants=network-online.target
+# The host-side LAN forwarder (TCP port on the home network -> relay socket).
+Wants=iptv-relay-forwarder.service
+# Never give up for good: with 0 there is no start-rate limit, so a long VPN
+# or internet outage only stretches the retry delay (RestartSteps below).
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/iptv-relay/iptv-relay.env
+Environment=RELAY_SOCKET=%t/iptv-relay/relay.sock
+Environment=RELAY_STATE_FILE=%t/iptv-relay/guard-state.json
+Environment=RELAY_NODE=@NODE@
+ExecStart=@NODE@ @REPO@/tools/multiplex-relay/relay-vpn.mjs
+# Launcher exit codes: 0 only after SIGTERM/SIGINT/SIGHUP (a deliberate stop);
+# 1 or a guard code (2-5) on any failure, including loss of the VPN.
+Restart=on-failure
+# 5 s at first, growing over 6 failed attempts to 5 min (systemd >= 254).
+RestartSec=5s
+RestartSteps=6
+RestartMaxDelaySec=5min
+# The launcher's own waits (daemon, internet, VPN handshake) can take minutes.
+TimeoutStartSec=infinity
+# Clean stop: SIGTERM to the launcher, which stops the guard and the relay
+# (the relay closes the provider connection first) and waits for the
+# namespace to go, typically 3-18 s. Guard and relay are started by the root
+# vopono daemon, outside this unit's cgroup, so only the launcher can be
+# signalled; if it has to be SIGKILLed after the timeout, the guard notices
+# within 3 s and stops the relay itself.
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=45s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=iptv-relay
+UMask=0077
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

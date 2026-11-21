@@ -1,0 +1,26 @@
+# One health check of the IPTV LAN relay, run every minute by
+# iptv-relay-health.timer (systemd USER unit). Template: install.sh replaces
+# @NODE@ and @REPO@.
+#
+# `relayctl health --repair` checks only local things (unit state, the relay's
+# VPN namespace, the guard's last egress verdict, /status on the relay socket,
+# the LAN port) and never contacts the provider or an IP-echo service. It
+# restarts the relay only after 3 failed checks in a row while the relay has
+# been running for at least 10 minutes, and restarts just the forwarder when
+# only the LAN port fails twice in a row. A stopped relay is left alone.
+[Unit]
+Description=IPTV LAN relay health check
+Documentation=file://@REPO@/docs/architecture/multiplex-relay-operations.md
+
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/.config/iptv-relay/iptv-relay.env
+Environment=RELAY_SOCKET=%t/iptv-relay/relay.sock
+Environment=RELAY_STATE_FILE=%t/iptv-relay/guard-state.json
+ExecStart=@NODE@ @REPO@/tools/multiplex-relay/relayctl health --repair
+TimeoutStartSec=90s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=iptv-relay-health
+UMask=0077
+NoNewPrivileges=yes

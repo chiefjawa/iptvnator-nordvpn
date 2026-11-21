@@ -1,0 +1,19 @@
+# Runs iptv-relay-health.service once a minute (systemd USER unit).
+#
+# Also the suspend/resume hook: a user unit cannot hook sleep.target, but a
+# wall-clock (OnCalendar=) timer whose time passed during a suspend fires
+# right after resume. The relay's in-namespace guard also notices the resume
+# itself and re-checks the VPN within 90 s (fail closed); this timer is the
+# backstop for a relay or forwarder that is hung rather than gone.
+[Unit]
+Description=IPTV LAN relay health check, every minute and after resume
+Documentation=file://@REPO@/docs/architecture/multiplex-relay-operations.md
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+AccuracySec=5s
+Persistent=false
+Unit=iptv-relay-health.service
+
+[Install]
+WantedBy=timers.target

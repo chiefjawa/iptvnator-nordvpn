@@ -123,7 +123,7 @@ relayDown= in= out=`).
 ## LAN firewall
 
 ufw blocks the port from other devices; the owner runs once:
-`sudo ufw allow in on wlp8s0 from 192.168.1.0/24 to any port 8790 proto tcp comment 'IPTV relay'`.
+`sudo ufw allow from 192.168.1.0/24 to any port 8790 proto tcp comment 'IPTV relay'`.
 `vopono exec -f <port>` was tested as an alternative: it does listen on all
 host interfaces, but every client then appears as the namespace gateway
 address and there is no source filter, so the socket + forwarder is used.

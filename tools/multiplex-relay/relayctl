@@ -1,0 +1,836 @@
+#!/usr/bin/env node
+// relayctl: day-to-day control of the IPTV LAN relay (systemd user units).
+//
+//   relayctl status              table from the relay's /status
+//   relayctl logs [-f] [args]    journal of the relay units (args go to journalctl)
+//   relayctl start|stop|restart  the relay (the forwarder follows it)
+//   relayctl selftest [--quiet]  namespace, VPN egress, LAN port, provider login
+//   relayctl health [--repair]   local-only check used by iptv-relay-health.timer
+//   relayctl url                 server URL a TV should use (no credentials)
+//
+// Exit codes: 0 ok, 1 a check failed, 2 usage or config problem, 3 relay
+// not answering. The relay config is read at run time for the status token,
+// the first local login and the LAN port; none of them is ever printed, and
+// every line of output passes through a mask of all config secrets.
+//
+// Env (normally from ~/.config/iptv-relay/iptv-relay.env): MULTIPLEX_RELAY_CONFIG,
+// RELAY_SOCKET, RELAY_STATE_FILE, RELAY_LAN_HOST (override the LAN address),
+// RELAY_ENV_FILE (another env file).
+'use strict';
+
+const { execFile, spawn, spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const http = require('node:http');
+const net = require('node:net');
+const os = require('node:os');
+const path = require('node:path');
+const { pathToFileURL } = require('node:url');
+
+const RELAY_UNIT = 'iptv-relay.service';
+const FORWARDER_UNIT = 'iptv-relay-forwarder.service';
+const HEALTH_UNIT = 'iptv-relay-health.service';
+const UNITS = [RELAY_UNIT, FORWARDER_UNIT];
+const DEFAULT_LAN_HOST = '192.168.1.96';
+const DEFAULT_PORT = 8790;
+/** health --repair: consecutive failures before acting. */
+const RELAY_FAILS_TO_RESTART = 3;
+const FORWARDER_FAILS_TO_RESTART = 2;
+/** The launcher may legitimately wait ~8.5 min before the relay is up. */
+const MIN_ACTIVE_SEC_BEFORE_RESTART = 600;
+/** A failure streak older than this is stale (e.g. across a long suspend). */
+const STREAK_RESET_MS = 5 * 60_000;
+
+const home = os.homedir();
+const runtimeDir =
+    process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid()}`;
+const envFile =
+    process.env.RELAY_ENV_FILE ||
+    path.join(home, '.config/iptv-relay/iptv-relay.env');
+
+// ---------------------------------------------------------------- output
+
+let secrets = [];
+
+function mask(text) {
+    let out = String(text);
+    for (const secret of secrets) {
+        out = out.split(secret).join('***');
+    }
+    return out;
+}
+
+function say(text = '') {
+    process.stdout.write(`${mask(text)}\n`);
+}
+
+function warn(text) {
+    process.stderr.write(`relayctl: ${mask(text)}\n`);
+}
+
+function die(text, code = 2) {
+    warn(text);
+    process.exit(code);
+}
+
+// ---------------------------------------------------------------- settings
+
+function readEnvFile() {
+    const values = {};
+    try {
+        for (const line of fs.readFileSync(envFile, 'utf8').split('\n')) {
+            const match = /^\s*([A-Z_][A-Z0-9_]*)=(.*)$/.exec(line);
+            if (match) {
+                values[match[1]] = match[2].trim().replace(/^(["'])(.*)\1$/, '$2');
+            }
+        }
+    } catch {
+        // Optional: the unit passes the same values through its environment.
+    }
+    return values;
+}
+
+const fileEnv = readEnvFile();
+const setting = (key) => process.env[key] || fileEnv[key] || '';
+const socketPath =
+    setting('RELAY_SOCKET') || path.join(runtimeDir, 'iptv-relay/relay.sock');
+const stateFile =
+    setting('RELAY_STATE_FILE') ||
+    path.join(runtimeDir, 'iptv-relay/guard-state.json');
+const healthFile = path.join(path.dirname(stateFile), 'health.json');
+
+let configCache = null;
+
+/** The private relay config; registers every secret in it for masking. */
+function loadConfig() {
+    if (configCache) return configCache;
+    const file = setting('MULTIPLEX_RELAY_CONFIG');
+    if (!file) {
+        die(`MULTIPLEX_RELAY_CONFIG is not set (environment or ${envFile})`);
+    }
+    let config;
+    try {
+        config = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch {
+        die('the relay config could not be read or is not valid JSON');
+    }
+    if (!config || typeof config !== 'object') die('the relay config is not an object');
+    const found = [config.token, config.username, config.password, config.serverUrl];
+    try {
+        found.push(new URL(String(config.serverUrl)).hostname);
+    } catch {
+        // Not a URL; the whole string is masked anyway.
+    }
+    for (const login of Array.isArray(config.clients) ? config.clients : []) {
+        found.push(login?.username, login?.password);
+    }
+    secrets = found
+        .filter((value) => typeof value === 'string' && value.trim().length >= 3)
+        .map((value) => value.trim())
+        .sort((a, b) => b.length - a.length);
+    configCache = config;
+    return config;
+}
+
+function lanPort(config) {
+    const listen = config?.lan?.listen;
+    const match = typeof listen === 'string' ? /:(\d{1,5})$/.exec(listen) : null;
+    return match ? Number(match[1]) : DEFAULT_PORT;
+}
+
+function ipv4InCidr(ip, cidr) {
+    const [base, bits = '32'] = String(cidr).split('/');
+    if (!net.isIPv4(ip) || !net.isIPv4(base)) return false;
+    const toInt = (a) => a.split('.').reduce((n, o) => n * 256 + Number(o), 0);
+    const prefix = Number(bits);
+    if (!(prefix >= 0 && prefix <= 32)) return false;
+    const size = 2 ** (32 - prefix);
+    return Math.floor(toInt(ip) / size) === Math.floor(toInt(base) / size);
+}
+
+/** The PC's address on the home network: inside lan.allowFrom, not loopback. */
+function lanHost(config) {
+    const forced = setting('RELAY_LAN_HOST');
+    if (forced) return forced;
+    const allow = Array.isArray(config?.lan?.allowFrom) ? config.lan.allowFrom : [];
+    const addresses = Object.values(os.networkInterfaces())
+        .flat()
+        .filter((a) => a && a.family === 'IPv4' && !a.internal)
+        .map((a) => a.address);
+    if (addresses.includes(DEFAULT_LAN_HOST)) return DEFAULT_LAN_HOST;
+    return addresses.find((ip) => allow.some((cidr) => ipv4InCidr(ip, cidr))) || null;
+}
+
+// ---------------------------------------------------------------- HTTP
+
+function httpGet(options, timeoutMs) {
+    return new Promise((resolve) => {
+        let settled = false;
+        const done = (value) => {
+            if (!settled) {
+                settled = true;
+                resolve(value);
+            }
+        };
+        const req = http.request(options, (res) => {
+            let body = '';
+            res.setEncoding('utf8');
+            res.on('data', (chunk) => {
+                body += chunk;
+                if (body.length > 8 * 1024 * 1024) req.destroy();
+            });
+            res.on('end', () => done({ status: res.statusCode, body }));
+            res.on('error', () => done(null));
+        });
+        req.setTimeout(timeoutMs, () => req.destroy());
+        req.on('error', () => done(null));
+        req.end();
+    });
+}
+
+/** GET on the relay's unix socket (bypasses the forwarder). */
+function viaSocket(urlPath, timeoutMs = 15_000) {
+    // A PROXY v1 line must come first; and no `agent: false` here, which
+    // would make Node ignore createConnection.
+    return httpGet(
+        {
+            path: urlPath,
+            headers: { Connection: 'close', Host: 'relay.local' },
+            createConnection: () => {
+                const socket = net.connect(socketPath);
+                socket.write('PROXY UNKNOWN\r\n');
+                return socket;
+            },
+        },
+        timeoutMs
+    );
+}
+
+/** GET through the forwarder on the LAN address, as a TV would. */
+function viaLan(host, port, urlPath, timeoutMs = 10_000) {
+    return httpGet(
+        { host, port, path: urlPath, agent: false, headers: { Connection: 'close' } },
+        timeoutMs
+    );
+}
+
+async function fetchStatus(config, timeoutMs) {
+    const response = await viaSocket(`/${config.token}/status`, timeoutMs);
+    if (!response || response.status !== 200) return { response, data: null };
+    try {
+        return { response, data: JSON.parse(response.body) };
+    } catch {
+        return { response, data: null };
+    }
+}
+
+// ---------------------------------------------------------------- systemd
+
+function systemctl(args, opts = {}) {
+    return spawnSync('systemctl', ['--user', ...args], {
+        encoding: 'utf8',
+        ...opts,
+    });
+}
+
+function unitState(unit) {
+    const result = systemctl([
+        'show',
+        unit,
+        '--timestamp=unix',
+        '-p',
+        'LoadState,ActiveState,SubState,ActiveEnterTimestamp,NRestarts',
+    ]);
+    const props = {};
+    for (const line of (result.stdout || '').split('\n')) {
+        const eq = line.indexOf('=');
+        if (eq > 0) props[line.slice(0, eq)] = line.slice(eq + 1);
+    }
+    const since = /^@(\d+)/.exec(props.ActiveEnterTimestamp || '');
+    return {
+        load: props.LoadState || 'unknown',
+        active: props.ActiveState || 'unknown',
+        sub: props.SubState || '',
+        activeSinceSec: since ? Date.now() / 1000 - Number(since[1]) : null,
+        restarts: props.NRestarts ?? '-',
+    };
+}
+
+function describeUnit(unit) {
+    const s = unitState(unit);
+    if (s.load === 'not-found') return 'not installed';
+    const age = s.active === 'active' && s.activeSinceSec !== null
+        ? ` for ${duration(s.activeSinceSec)}`
+        : '';
+    return `${s.active}${s.sub ? ` (${s.sub})` : ''}${age}, restarts ${s.restarts}`;
+}
+
+// ---------------------------------------------------------------- VPN namespace
+
+let libCache = null;
+
+async function lib() {
+    if (!libCache) {
+        libCache = await import(
+            pathToFileURL(path.join(__dirname, 'relay-vpn-lib.mjs')).href
+        );
+    }
+    return libCache;
+}
+
+/** The running relay namespace (launched by our guard), or null. */
+async function relayNamespace() {
+    const l = await lib();
+    const namespaces = await l.listNamespaces();
+    return (
+        namespaces.find(
+            (ns) => l.isRelayNamespace(ns.id) && l.guardApplications(ns).length > 0
+        ) || null
+    );
+}
+
+/** Public IP seen from inside the namespace, via a short app run in it. */
+async function namespacePublicIp(namespaceId) {
+    const l = await lib();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'relayctl-'));
+    const out = path.join(dir, 'ip');
+    const toml = path.join(dir, 'vopono.toml');
+    fs.writeFileSync(toml, 'no_killswitch = false\n', { mode: 0o600 });
+    const script =
+        "const u=['https://api.ipify.org','https://icanhazip.com'];" +
+        '(async()=>{for(const x of u){try{const r=await fetch(x,{signal:AbortSignal.timeout(8000)});' +
+        "const t=(await r.text()).trim();if(r.ok&&t.length<64){require('fs').writeFileSync(process.argv[1],t,{mode:0o600});return}}catch{}}})()";
+    try {
+        await new Promise((resolve) => {
+            execFile(
+                'vopono',
+                [
+                    'exec',
+                    '--existing-netns',
+                    namespaceId,
+                    '--vopono-config',
+                    toml,
+                    l.quoteCommand([process.execPath, '-e', script, out]),
+                ],
+                { timeout: 45_000 },
+                () => resolve()
+            );
+        });
+        const ip = fs.readFileSync(out, 'utf8').trim();
+        return net.isIP(ip) ? ip : null;
+    } catch {
+        return null;
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+}
+
+function guardState() {
+    try {
+        const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+        const at = Date.parse(state.checkedAt);
+        return { ...state, ageSec: Number.isFinite(at) ? (Date.now() - at) / 1000 : null };
+    } catch {
+        return null;
+    }
+}
+
+// ---------------------------------------------------------------- formatting
+
+const dash = '-';
+
+function get(object, dotted) {
+    let value = object;
+    for (const key of dotted.split('.')) {
+        if (value === null || value === undefined || typeof value !== 'object') return undefined;
+        value = value[key];
+    }
+    return value;
+}
+
+function show(value, digits) {
+    if (value === undefined || value === null || value === '') return dash;
+    if (typeof value === 'boolean') return value ? 'yes' : 'no';
+    if (typeof value === 'number') {
+        return digits === undefined ? String(value) : value.toFixed(digits);
+    }
+    if (typeof value === 'object') return JSON.stringify(value);
+    return String(value);
+}
+
+function f(object, dotted, digits) {
+    return show(get(object, dotted), digits);
+}
+
+function duration(sec) {
+    if (typeof sec !== 'number' || !Number.isFinite(sec)) return dash;
+    const s = Math.max(0, Math.round(sec));
+    const d = Math.floor(s / 86_400);
+    const h = Math.floor((s % 86_400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    if (d) return `${d}d ${h}h ${m}m`;
+    if (h) return `${h}h ${m}m`;
+    if (m) return `${m}m ${s % 60}s`;
+    return `${s}s`;
+}
+
+function msAsSec(object, dotted) {
+    const value = get(object, dotted);
+    return typeof value === 'number' ? (value / 1000).toFixed(1) : dash;
+}
+
+function bytes(value) {
+    if (typeof value !== 'number') return dash;
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let n = value;
+    let i = 0;
+    while (n >= 1024 && i < units.length - 1) {
+        n /= 1024;
+        i += 1;
+    }
+    return `${n.toFixed(i ? 1 : 0)} ${units[i]}`;
+}
+
+function table(headers, rows, textCols = 2, indent = '  ') {
+    const widths = headers.map((h, i) =>
+        Math.max(h.length, ...rows.map((r) => String(r[i]).length))
+    );
+    const fmt = (cells) =>
+        indent +
+        cells
+            .map((c, i) => (i < textCols ? String(c).padEnd(widths[i]) : String(c).padStart(widths[i])))
+            .join('  ')
+            .trimEnd();
+    say(fmt(headers));
+    for (const row of rows) say(fmt(row));
+}
+
+function kv(label, value) {
+    say(`${label.padEnd(16)} ${value}`);
+}
+
+// ---------------------------------------------------------------- commands
+
+async function cmdStatus() {
+    const config = loadConfig();
+    const { response, data } = await fetchStatus(config, 15_000);
+    if (!data) {
+        warn(
+            `the relay is not answering on its socket (${response ? `HTTP ${response.status}` : 'no connection'}).`
+        );
+        warn(`relay unit: ${describeUnit(RELAY_UNIT)}`);
+        warn('Try: relayctl logs   (or: relayctl restart)');
+        process.exit(3);
+    }
+    const guard = guardState();
+    say('IPTV LAN relay');
+    kv('version', `${f(data, 'version')} (${f(data, 'commit')})`);
+    kv('uptime', duration(get(data, 'uptimeSec')));
+    kv('units', `relay ${describeUnit(RELAY_UNIT)}; forwarder ${describeUnit(FORWARDER_UNIT)}`);
+    kv(
+        'VPN egress',
+        guard
+            ? `${guard.ok ? show(guard.egress) : `FAILING: ${show(guard.reason)}`} (checked ${duration(guard.ageSec)} ago)`
+            : dash
+    );
+    kv(
+        'live',
+        `max ${f(data, 'maxLiveChannels')} channels, suspended for a movie: ${f(data, 'suspended')}, zaps ${f(data, 'zaps')}, queued ${bytes(get(data, 'queueBytes'))}`
+    );
+    say();
+
+    say('Upstream (the one provider connection)');
+    const gate = get(data, 'upstream.gate');
+    table(
+        ['open', 'stream', 'opens', 'attempts', 'refusals', 'errors', 'last', 'stalls', 'peak', 'holder', 'gate refused'],
+        [[
+            f(data, 'upstream.open'),
+            f(data, 'upstream.streamId'),
+            f(data, 'upstream.opens'),
+            f(data, 'upstream.attempts'),
+            f(data, 'upstream.refusals'),
+            f(data, 'upstream.errors'),
+            f(data, 'upstream.lastStatus'),
+            f(data, 'upstream.stalls'),
+            gate ? `${f(data, 'upstream.maxOpenAtOnce')}/${show(gate.peak)}` : f(data, 'upstream.maxOpenAtOnce'),
+            gate ? show(gate.holder) : dash,
+            gate ? show(gate.refused) : dash,
+        ]],
+        1
+    );
+    const peak = Math.max(
+        Number(get(data, 'upstream.maxOpenAtOnce')) || 0,
+        Number(get(data, 'upstream.gate.peak')) || 0
+    );
+    if (peak > 1) say('  WARNING: more than one provider connection was open at once (a bug).');
+    say();
+
+    const channels = Array.isArray(data.channels) ? data.channels : [];
+    say(`Live channels (${channels.length})`);
+    if (channels.length) {
+        table(
+            ['id', 'name', 'state', 'clients', 'reserve s', 'queued s', 'skipped s', 'dry stalls', 'bp pauses', 'bp drops', 'cap drop s', 'restarts', 'starved'],
+            channels.map((c) => [
+                f(c, 'streamId'),
+                mask(show(get(c, 'name'))).slice(0, 28),
+                f(c, 'state'),
+                f(c, 'clients'),
+                f(c, 'reserveSec', 1),
+                f(c, 'queuedSec', 1),
+                msAsSec(c, 'skippedMs'),
+                f(c, 'dryStalls'),
+                f(c, 'backpressurePauses'),
+                f(c, 'backpressureDrops'),
+                msAsSec(c, 'capDroppedMs'),
+                f(c, 'restarts'),
+                f(c, 'starvedEnds'),
+            ])
+        );
+        const clients = channels.flatMap((c) =>
+            (Array.isArray(c.clientDetails) ? c.clientDetails : []).map((d) => [
+                f(c, 'streamId'),
+                f(d, 'remote'),
+                duration(get(d, 'connectedSec')),
+                f(d, 'startupWaitMs'),
+                f(d, 'aheadSec', 1),
+                f(d, 'cushionSec', 1),
+                f(d, 'paused'),
+            ])
+        );
+        if (clients.length) {
+            say();
+            say('Players');
+            table(['channel', 'player', 'connected', 'start ms', 'ahead s', 'cushion s', 'paused'], clients);
+        }
+    }
+    say();
+
+    const session = get(data, 'vod.session');
+    say('Movies / series (VOD)');
+    kv(
+        '  session',
+        session
+            ? `${f(session, 'label')} from ${f(session, 'remote')}, ${duration(get(session, 'ageSec'))}, ${get(session, 'streaming') ? 'streaming' : 'idle'}${get(session, 'preemptedLive') ? ', paused live TV' : ''}`
+            : get(data, 'vod') ? 'none' : dash
+    );
+    kv(
+        '  totals',
+        `policy ${f(data, 'vod.policy')}, sessions ${f(data, 'vod.sessions')}, requests ${f(data, 'vod.requests')}, superseded ${f(data, 'vod.superseded')}, upstream errors ${f(data, 'vod.upstreamErrors')}, sent ${bytes(get(data, 'vod.bytes'))}`
+    );
+    say();
+
+    say('Refused with HTTP 503');
+    table(
+        ['live: over channel limit', 'live: movie playing', 'movie: live playing', 'movie: busy'],
+        [[
+            f(data, 'refused503.liveCapacity'),
+            f(data, 'refused503.liveWhileVod'),
+            f(data, 'refused503.vodWhileLive'),
+            f(data, 'refused503.vodBusy'),
+        ]],
+        0
+    );
+    say();
+
+    say('Guide and catalogue cache');
+    const cache = get(data, 'api.cache');
+    const groups = cache && typeof cache === 'object' ? Object.keys(cache).sort() : [];
+    if (groups.length) {
+        table(
+            ['class', 'last age', 'hits', 'stale', 'misses', 'errors'],
+            groups.map((g) => [
+                g,
+                duration(get(cache[g], 'lastAgeSec')),
+                f(cache[g], 'hits'),
+                f(cache[g], 'stale'),
+                f(cache[g], 'misses'),
+                f(cache[g], 'errors'),
+            ]),
+            1
+        );
+    } else {
+        say('  (nothing served yet)');
+    }
+    kv(
+        '  provider API',
+        `requests ${f(data, 'api.provider.requests')}, failures ${f(data, 'api.provider.failures')}, in flight ${f(data, 'api.provider.inFlight')}, queued ${f(data, 'api.provider.queued')}`
+    );
+    kv(
+        '  HTTP',
+        `bad logins ${f(data, 'http.unauthorized')}, not found ${f(data, 'http.notFound')}, HLS refused ${f(data, 'http.m3u8Refused')}, errors ${f(data, 'http.errors')}`
+    );
+}
+
+function cmdLogs(args) {
+    const follow = args.length === 0 ? ['-n', '200'] : args;
+    const child = spawn(
+        'journalctl',
+        [
+            '--user',
+            ...[...UNITS, HEALTH_UNIT].flatMap((u) => ['-u', u]),
+            '-o',
+            'short-iso',
+            '--no-hostname',
+            ...follow,
+        ],
+        { stdio: 'inherit' }
+    );
+    child.on('exit', (code) => process.exit(code ?? 0));
+}
+
+function cmdUnit(verb) {
+    // stop/restart reach the forwarder through PartOf=; start through Wants=.
+    const result = systemctl([verb, RELAY_UNIT], { stdio: 'inherit' });
+    if (result.status === 0) say(`${verb}: relay ${describeUnit(RELAY_UNIT)}`);
+    process.exit(result.status ?? 1);
+}
+
+function cmdUrl() {
+    const config = loadConfig();
+    const host = lanHost(config);
+    if (!host) die('no address of this PC is inside lan.allowFrom; set RELAY_LAN_HOST', 1);
+    say(`http://${host}:${lanPort(config)}`);
+    process.stderr.write(
+        'TiviMate: Xtream Codes playlist, this server address, and the local username/password\n' +
+            'from the "clients" list of the relay config (not shown here).\n'
+    );
+}
+
+/** Runs the checks; returns { failures: [...], lines: [...] }. */
+async function runChecks({ external }) {
+    const config = loadConfig();
+    const results = [];
+    const check = (name, ok, detail) => results.push({ name, ok, detail });
+
+    const relay = unitState(RELAY_UNIT);
+    const info = [`relay ${describeUnit(RELAY_UNIT)}`, `forwarder ${describeUnit(FORWARDER_UNIT)}`];
+
+    let namespace = null;
+    try {
+        namespace = await relayNamespace();
+        check('VPN namespace', Boolean(namespace), namespace ? `${namespace.id} up` : 'no relay namespace running');
+    } catch {
+        check('VPN namespace', false, 'vopono could not list namespaces (is vopono.service running?)');
+    }
+
+    if (external) {
+        if (namespace) {
+            const l = await lib();
+            const [hostIp, insideIp] = await Promise.all([l.publicIp(), namespacePublicIp(namespace.id)]);
+            check(
+                'egress is VPN',
+                Boolean(hostIp && insideIp && hostIp !== insideIp),
+                !hostIp || !insideIp
+                    ? 'could not determine one of the public IPs'
+                    : hostIp === insideIp
+                      ? 'SAME (not protected)'
+                      : 'differs'
+            );
+        } else {
+            check('egress is VPN', false, 'no namespace to check');
+        }
+    } else {
+        const guard = guardState();
+        check(
+            'guard verdict',
+            Boolean(guard && guard.ok && guard.egress === 'differs'),
+            guard
+                ? guard.ok
+                    ? `egress ${show(guard.egress)}, checked ${duration(guard.ageSec)} ago`
+                    : `failing: ${show(guard.reason)}`
+                : 'no guard state yet'
+        );
+    }
+
+    const status = await fetchStatus(config, 15_000);
+    check(
+        'relay socket',
+        Boolean(status.data),
+        status.data
+            ? `/status answers (uptime ${duration(get(status.data, 'uptimeSec'))})`
+            : `no answer (${status.response ? `HTTP ${status.response.status}` : 'no connection'})`
+    );
+
+    const host = lanHost(config);
+    const port = lanPort(config);
+    if (!host) {
+        check('LAN port', false, 'no address of this PC is inside lan.allowFrom');
+    } else {
+        const lan = await viaLan(host, port, `/${config.token}/status`);
+        check(
+            'LAN port',
+            lan?.status === 200,
+            `${host}:${port} ${lan ? `HTTP ${lan.status}` : 'no answer'}`
+        );
+    }
+
+    if (external) {
+        const login = Array.isArray(config.clients) ? config.clients[0] : null;
+        if (!login?.username || !login?.password) {
+            check('provider login', false, 'no local login in config.clients');
+        } else {
+            const query = new URLSearchParams({ username: login.username, password: login.password });
+            const api = await viaSocket(`/player_api.php?${query}`, 45_000);
+            let user = null;
+            try {
+                user = JSON.parse(api?.body ?? '')?.user_info ?? null;
+            } catch {
+                // Reported below.
+            }
+            const auth = user ? String(user.auth) : null;
+            check(
+                'provider login',
+                auth === '1',
+                user
+                    ? `auth ${auth === '1' ? 'OK' : `FAILED (${show(user.auth)})`}, max connections ${show(user.max_connections)}${api.status !== 200 ? ` (HTTP ${api.status}: provider unreachable?)` : ''}`
+                    : `no answer (${api ? `HTTP ${api.status}` : 'relay not answering'})`
+            );
+        }
+    }
+    return { relay, info, results, statusOk: Boolean(status.data), namespaceOk: Boolean(namespace) };
+}
+
+function printResults({ info, results }, quiet) {
+    if (!quiet) for (const line of info) say(`INFO  ${line}`);
+    for (const r of results) {
+        if (quiet && r.ok) continue;
+        say(`${r.ok ? 'PASS' : 'FAIL'}  ${r.name.padEnd(15)} ${r.detail}`);
+    }
+}
+
+async function cmdSelftest(args) {
+    const quiet = args.includes('--quiet') || args.includes('-q');
+    const relay = unitState(RELAY_UNIT);
+    const probe = await fetchStatus(loadConfig(), 10_000);
+    if (relay.active !== 'active' && !probe.data) {
+        warn(`the relay is not running (relay ${describeUnit(RELAY_UNIT)}). Start it: relayctl start`);
+        process.exit(3);
+    }
+    const outcome = await runChecks({ external: true });
+    printResults(outcome, quiet);
+    const failed = outcome.results.filter((r) => !r.ok).length;
+    if (!quiet) {
+        say(
+            failed
+                ? `${failed} check(s) failed.`
+                : 'All checks passed. (The LAN check runs from this PC, so it cannot prove the firewall lets TVs in.)'
+        );
+    }
+    process.exit(failed ? 1 : 0);
+}
+
+function readHealth() {
+    try {
+        return JSON.parse(fs.readFileSync(healthFile, 'utf8'));
+    } catch {
+        return {};
+    }
+}
+
+function writeHealth(state) {
+    try {
+        fs.mkdirSync(path.dirname(healthFile), { recursive: true, mode: 0o700 });
+        fs.writeFileSync(`${healthFile}.tmp`, JSON.stringify(state), { mode: 0o600 });
+        fs.renameSync(`${healthFile}.tmp`, healthFile);
+    } catch {
+        // Counting is best effort.
+    }
+}
+
+async function cmdHealth(args) {
+    const repair = args.includes('--repair');
+    const relay = unitState(RELAY_UNIT);
+    if (relay.active !== 'active') {
+        // Stopped on purpose, or between automatic restarts: systemd owns that.
+        writeHealth({});
+        if (!repair) say(`relay ${describeUnit(RELAY_UNIT)}; nothing to check`);
+        process.exit(relay.active === 'failed' ? 1 : 0);
+    }
+    const outcome = await runChecks({ external: false });
+    const failedNames = outcome.results.filter((r) => !r.ok).map((r) => r.name);
+    const relayBroken = !outcome.namespaceOk || !outcome.statusOk;
+    const lanOnly = !relayBroken && failedNames.includes('LAN port');
+
+    const now = Date.now();
+    const prev = readHealth();
+    const fresh = typeof prev.at === 'number' && now - prev.at < STREAK_RESET_MS;
+    const state = {
+        at: now,
+        relayFails: relayBroken ? (fresh ? (prev.relayFails || 0) : 0) + 1 : 0,
+        lanFails: lanOnly ? (fresh ? (prev.lanFails || 0) : 0) + 1 : 0,
+    };
+
+    if (failedNames.length) {
+        printResults({ info: outcome.info, results: outcome.results }, true);
+    } else if (!repair) {
+        printResults(outcome, false);
+    }
+
+    let code = failedNames.length ? 1 : 0;
+    if (repair) {
+        const settled =
+            outcome.relay.activeSinceSec !== null &&
+            outcome.relay.activeSinceSec >= MIN_ACTIVE_SEC_BEFORE_RESTART;
+        if (state.relayFails >= RELAY_FAILS_TO_RESTART && settled) {
+            say(`health: relay failed ${state.relayFails} checks in a row; restarting ${RELAY_UNIT}`);
+            systemctl(['--no-block', 'restart', RELAY_UNIT]);
+            state.relayFails = 0;
+            state.lanFails = 0;
+        } else if (state.relayFails && !settled) {
+            say('health: relay still starting (running < 10 min); not restarting yet');
+        } else if (state.lanFails >= FORWARDER_FAILS_TO_RESTART) {
+            say(`health: LAN port failed ${state.lanFails} checks in a row; restarting ${FORWARDER_UNIT}`);
+            systemctl(['--no-block', 'restart', FORWARDER_UNIT]);
+            state.lanFails = 0;
+        }
+        // The timer's unit should not show as failed for a transient miss.
+        code = 0;
+    }
+    writeHealth(state);
+    process.exit(code);
+}
+
+function usage(code) {
+    process.stdout.write(
+        [
+            'Usage: relayctl <command>',
+            '  status              what the relay is doing (table)',
+            '  logs [-f] [args]    relay, forwarder and health-check journal',
+            '  start|stop|restart  control the relay service',
+            '  selftest [--quiet]  VPN namespace, egress, LAN port, provider login',
+            '  health [--repair]   quick local check (what the minute timer runs)',
+            '  url                 server address for TiviMate (no credentials)',
+            '',
+        ].join('\n')
+    );
+    process.exit(code);
+}
+
+async function main() {
+    const [command, ...rest] = process.argv.slice(2);
+    switch (command) {
+        case 'status':
+            return cmdStatus();
+        case 'logs':
+            return cmdLogs(rest);
+        case 'start':
+        case 'stop':
+        case 'restart':
+            return cmdUnit(command);
+        case 'selftest':
+            return cmdSelftest(rest);
+        case 'health':
+            return cmdHealth(rest);
+        case 'url':
+            return cmdUrl();
+        case undefined:
+        case 'help':
+        case '-h':
+        case '--help':
+            return usage(0);
+        default:
+            warn(`unknown command: ${command}`);
+            return usage(2);
+    }
+}
+
+main().catch((error) => die(`unexpected error: ${error?.message ?? error}`, 2));

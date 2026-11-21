@@ -1,0 +1,36 @@
+# Host-side LAN forwarder for iptv-relay.service (systemd USER unit).
+#
+# Listens on the home network (lan.listen in the relay config, default
+# 0.0.0.0:8790), admits only lan.allowFrom (e.g. 192.168.1.0/24) and pipes
+# each connection to the relay's unix socket inside the VPN namespace.
+# Template: install.sh replaces @NODE@ and @REPO@.
+#
+# Started by iptv-relay.service (Wants=). PartOf= makes "stop" and "restart"
+# of the relay apply here too. Deliberately not BindsTo=: the forwarder may
+# stay up while the relay restarts after a VPN drop (it closes connections
+# until the socket is back), so a relay restart never needs a second unit
+# to come back.
+[Unit]
+Description=IPTV LAN relay forwarder (home network to the VPN namespace)
+Documentation=file://@REPO@/docs/architecture/multiplex-relay-operations.md
+PartOf=iptv-relay.service
+After=iptv-relay.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/iptv-relay/iptv-relay.env
+ExecStart=@NODE@ @REPO@/dist/apps/multiplex-relay/forwarder.js --socket %t/iptv-relay/relay.sock
+# Exit 2 = config error, 1 = cannot listen (port in use); both retried with
+# a growing delay, 0 = SIGTERM.
+Restart=on-failure
+RestartSec=3s
+RestartSteps=5
+RestartMaxDelaySec=1min
+KillSignal=SIGTERM
+TimeoutStopSec=10s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=iptv-relay-forwarder
+UMask=0077
+NoNewPrivileges=yes

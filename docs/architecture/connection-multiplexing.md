@@ -111,7 +111,8 @@ the provider's). It lives in the `electron-backend` project because Nx does
 not let one app import another, and the engine has no Electron imports; the
 bundle fails to build if `electron` is ever pulled in. The protected service
 launch (own NordVPN namespace, unix socket, host forwarder) is described in
-`tools/multiplex-relay/INTERFACE.md`.
+`tools/multiplex-relay/INTERFACE.md`; running it at home:
+[operating the relay](multiplex-relay-operations.md).
 
 - **One connection, live and VOD.** Every provider stream request passes
   `UpstreamGate`, which admits one at a time and is released only when the
