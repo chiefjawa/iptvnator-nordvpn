@@ -3,6 +3,8 @@
  * what it receives, and a relay wired to the fake provider.
  */
 
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
     SYNTHETIC_AUDIO_PID,
     SYNTHETIC_PMT_PID,
@@ -231,21 +233,27 @@ export const FAKE_SECRETS = {
     token: 'tokenABCDEFGHIJKLMNOPQRSTUV0123',
 };
 
+export const FAKE_LOGIN = { username: 'tv-room', password: 'local-pw-55' };
+
 export function testConfig(
     channels: number[],
-    tuning: Partial<RelayTuning> = {}
+    tuning: Partial<RelayTuning> = {},
+    extra: Record<string, unknown> = {}
 ): RelayConfig {
     const config = parseRelayConfig({
         ...FAKE_SECRETS,
         listen: '127.0.0.1:8790',
+        cacheDir: join(tmpdir(), 'relay-spec-unused-cache'),
+        clients: [FAKE_LOGIN],
         channels: channels.map((streamId) => ({
             streamId,
             name: `Synthetic ${streamId}`,
         })),
+        ...extra,
     });
     return {
         ...config,
-        port: 0,
+        listen: { kind: 'tcp', host: '127.0.0.1', port: 0 },
         tuning: { ...DEFAULT_RELAY_TUNING, ...tuning },
     };
 }
@@ -300,9 +308,9 @@ export function connect(
     streamId: number
 ): { output: RecordingOutput; leave(): void } {
     const output = new RecordingOutput(rig.clock);
-    const client = rig.relay.attach(streamId, output, '192.0.2.10');
+    const { client } = rig.relay.attach(streamId, output, '192.0.2.10');
     if (!client) {
-        throw new Error('channel not configured');
+        throw new Error('channel refused');
     }
     return { output, leave: () => rig.relay.detach(streamId, client) };
 }

@@ -2,12 +2,8 @@ import { request } from 'node:http';
 import { AddressInfo } from 'node:net';
 import { Server } from 'node:http';
 import { createFakeProvider, FakeProvider } from '../testing/fake-provider';
-import { LanRelay } from './lan-relay';
-import {
-    closeRelayServer,
-    createRelayHttpServer,
-    listenRelay,
-} from './lan-relay-http';
+import { closeRelayServer, createRelayHttpServer } from './lan-relay-http';
+import { RelayApp } from './relay-app';
 import {
     FAKE_SECRETS,
     StreamChecker,
@@ -93,7 +89,7 @@ function readLive(
 
 describe('LanRelay over HTTP', () => {
     let provider: FakeProvider;
-    let relay: LanRelay;
+    let app: RelayApp;
     let server: Server;
     let port: number;
 
@@ -106,19 +102,21 @@ describe('LanRelay over HTTP', () => {
             gopFrames: 25,
         });
         const config = testConfig([1, 2]);
-        relay = new LanRelay({
+        app = new RelayApp({
             config,
             open: provider.open,
             clock: provider.clock,
         });
-        server = createRelayHttpServer(relay, config);
-        port = ((await listenRelay(server, '127.0.0.1', 0)) as AddressInfo)
-            .port;
-        relay.start();
+        server = createRelayHttpServer(app);
+        await new Promise<void>((resolve) =>
+            server.listen(0, '127.0.0.1', () => resolve())
+        );
+        port = (server.address() as AddressInfo).port;
+        app.relay.start();
     });
 
     afterAll(async () => {
-        await relay.stop();
+        await app.stop();
         await closeRelayServer(server);
     });
 
@@ -144,7 +142,7 @@ describe('LanRelay over HTTP', () => {
         expect((await fetchText(port, `/${wrong}/playlist.m3u`)).status).toBe(
             404
         );
-        expect((await fetchText(port, `/${TOKEN}/live/3.ts`)).status).toBe(404);
+        expect((await fetchText(port, `/${TOKEN}/live/x.ts`)).status).toBe(404);
         expect((await fetchText(port, `/${TOKEN}/other`)).status).toBe(404);
         expect((await fetchText(port, `/${TOKEN}/status`, 'POST')).status).toBe(
             405
@@ -153,7 +151,7 @@ describe('LanRelay over HTTP', () => {
         expect(head.status).toBe(200);
         expect(head.headers['content-type']).toBe('video/mp2t');
         // A HEAD request does not start a channel.
-        expect(relay.status().channels).toHaveLength(0);
+        expect(app.relay.status().channels).toHaveLength(0);
     });
 
     it('streams two channels at once over real sockets', async () => {

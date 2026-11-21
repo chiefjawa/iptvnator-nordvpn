@@ -52,6 +52,10 @@ export class RelayChannel implements TileSink {
     private hadClient = false;
     /** When the channel, left without clients, is dropped. */
     graceUntilMs: number | null = null;
+    /** When the scheduler last delivered media for this channel. */
+    lastInputAtMs = 0;
+    /** Clients ended because no media arrived for too long. */
+    starvedEnds = 0;
 
     constructor(
         readonly streamId: number,

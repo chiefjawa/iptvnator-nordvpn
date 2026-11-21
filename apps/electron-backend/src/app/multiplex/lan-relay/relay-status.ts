@@ -4,7 +4,9 @@
  */
 
 import { TileState } from '../scheduler/scheduler-types';
+import { LiveRefusals } from './live-admission';
 import { RelayChannel } from './relay-channel';
+import { GateStatus } from './upstream-gate';
 
 export interface UpstreamStatus {
     open: boolean;
@@ -20,6 +22,10 @@ export interface UpstreamStatus {
     lastStatus: number | null;
     /** Most connections ever open at once; anything above 1 is a bug. */
     maxOpenAtOnce: number;
+    /** Connections dropped because they delivered nothing for too long. */
+    stalls: number;
+    /** The connection shared with VOD; its peak counts live and VOD. */
+    gate?: GateStatus;
 }
 
 export interface ClientStatus {
@@ -54,6 +60,7 @@ export interface ChannelStatus {
     backpressureDrops: number;
     backpressureDroppedMs: number;
     capDroppedMs: number;
+    starvedEnds: number;
     clientDetails: ClientStatus[];
 }
 
@@ -61,6 +68,11 @@ export interface RelayStatus {
     uptimeSec: number;
     upstream: UpstreamStatus;
     queueBytes: number;
+    maxLiveChannels: number;
+    /** Live rotation paused for a movie (`vodPolicy: "preempt"`). */
+    suspended: boolean;
+    zaps: number;
+    refused: LiveRefusals;
     channels: ChannelStatus[];
 }
 
@@ -84,6 +96,7 @@ export function channelStatus(
         sentSec: round1(counters.sentMediaMs / 1000),
         ...channel.totals,
         capDroppedMs: Math.round(channel.totals.capDroppedMs),
+        starvedEnds: channel.starvedEnds,
         newMediaMs: Math.round(channel.totals.newMediaMs),
         dryStalls: counters.dryStalls,
         dryStallMs: counters.dryStallMs,

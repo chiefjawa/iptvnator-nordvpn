@@ -12,6 +12,8 @@ import {
     StreamFormat,
 } from '@iptvnator/shared/interfaces';
 import { SchedulerConfig } from '../scheduler/scheduler-types';
+import { parseFrontConfig, RelayFrontConfig } from './relay-config-front';
+import { ListenSpec, parseListenSpec } from './relay-listen';
 
 export const CONFIG_ENV = 'MULTIPLEX_RELAY_CONFIG';
 
@@ -43,6 +45,16 @@ export interface RelayTuning {
     /** How often each channel's reserve is fed to the scheduler. */
     readonly reportIntervalMs: number;
     readonly statusLogSec: number;
+    /**
+     * Grace of a channel whose client switched to another channel from the
+     * same address within `zapWindowSec` (a zap), instead of `graceSec`.
+     */
+    readonly zapGraceSec: number;
+    readonly zapWindowSec: number;
+    /** Clients of a channel that got no media this long are ended cleanly. */
+    readonly endAfterStarveSec: number;
+    /** An upstream connection that delivers nothing this long is dropped. */
+    readonly upstreamStallSec: number;
 }
 
 export const DEFAULT_RELAY_TUNING: RelayTuning = {
@@ -59,15 +71,19 @@ export const DEFAULT_RELAY_TUNING: RelayTuning = {
     maxTotalQueueMb: 256,
     reportIntervalMs: 500,
     statusLogSec: 10,
+    zapGraceSec: 1,
+    zapWindowSec: 2,
+    endAfterStarveSec: 60,
+    upstreamStallSec: 20,
 };
 
-export interface RelayConfig {
+export interface RelayConfig extends RelayFrontConfig {
     readonly serverUrl: string;
     readonly username: string;
     readonly password: string;
-    readonly host: string;
-    readonly port: number;
+    readonly listen: ListenSpec;
     readonly token: string;
+    /** Optional names for stream ids, and the token playlist's entries. */
     readonly channels: readonly RelayChannelConfig[];
     readonly userAgent?: string;
     readonly tuning: RelayTuning;
@@ -130,11 +146,16 @@ export function parseRelayConfig(raw: unknown): RelayConfig {
         throw new RelayConfigError('config.userAgent must be a string');
     }
     const userAgent = typeof rawUserAgent === 'string' ? rawUserAgent : '';
+    const username = requireString(raw, 'username');
+    const password = requireString(raw, 'password');
     return {
         serverUrl,
-        username: requireString(raw, 'username'),
-        password: requireString(raw, 'password'),
-        ...parseListen(raw['listen'] ?? '0.0.0.0:8790'),
+        username,
+        password,
+        listen: parseListenSpec(raw['listen'] ?? '0.0.0.0:8790'),
+        ...parseFrontConfig(raw, { username, password }, (message) => {
+            throw new RelayConfigError(message);
+        }),
         token,
         channels: parseChannels(raw['channels']),
         userAgent: userAgent.trim() || undefined,
@@ -145,15 +166,50 @@ export function parseRelayConfig(raw: unknown): RelayConfig {
 
 /** The Xtream live MPEG-TS URL, built like `XtreamUrlService.constructLiveUrl`. */
 export function buildLiveUrl(config: RelayConfig, streamId: number): string {
+    return buildProviderUrl(config, 'live', [
+        `${streamId}.${StreamFormat.TsStreamFormat}`,
+    ]);
+}
+
+/**
+ * `<server>/<kind>/<user>/<pass>/<rest...>` with the real account; `rest`
+ * segments are already validated path segments and are encoded here.
+ */
+export function buildProviderUrl(
+    config: RelayConfig,
+    kind: string,
+    rest: readonly string[]
+): string {
     const base = normalizeXtreamServerUrl(config.serverUrl);
     const user = encodeURIComponent(config.username.trim());
     const pass = encodeURIComponent(config.password.trim());
-    return `${base}/live/${user}/${pass}/${streamId}.${StreamFormat.TsStreamFormat}`;
+    const tail = rest.map((part) => encodeURIComponent(part)).join('/');
+    return `${base}/${kind}/${user}/${pass}/${tail}`;
+}
+
+/** `<server>/<file>` with the real account in the query, plus `params`. */
+export function buildProviderQueryUrl(
+    config: RelayConfig,
+    file: string,
+    params: Readonly<Record<string, string>> = {}
+): string {
+    const base = normalizeXtreamServerUrl(config.serverUrl);
+    const query = new URLSearchParams({
+        username: config.username.trim(),
+        password: config.password.trim(),
+        ...params,
+    });
+    return `${base}/${file}?${query.toString()}`;
 }
 
 /** Values that must never appear in output, for the log scrubber. */
 export function secretsOf(config: RelayConfig): string[] {
-    const values = [config.username, config.password, config.token];
+    const values = [
+        config.username,
+        config.password,
+        config.token,
+        ...config.clients.map((client) => client.password),
+    ];
     try {
         const url = new URL(normalizeXtreamServerUrl(config.serverUrl));
         values.push(url.host, url.hostname, url.origin);
@@ -167,21 +223,12 @@ export function secretsOf(config: RelayConfig): string[] {
     ];
 }
 
-function parseListen(value: unknown): { host: string; port: number } {
-    const match =
-        typeof value === 'string'
-            ? /^\[?([^\]]*?)\]?:(\d{1,5})$/.exec(value.trim())
-            : null;
-    const port = match ? Number(match[2]) : NaN;
-    if (!match || !match[1] || port < 1 || port > 65535) {
-        throw new RelayConfigError('config.listen must look like 0.0.0.0:8790');
-    }
-    return { host: match[1], port };
-}
-
 function parseChannels(value: unknown): RelayChannelConfig[] {
-    if (!Array.isArray(value) || value.length === 0) {
-        throw new RelayConfigError('config.channels must be a non-empty array');
+    if (value === undefined) {
+        return [];
+    }
+    if (!Array.isArray(value)) {
+        throw new RelayConfigError('config.channels must be an array');
     }
     const seen = new Set<number>();
     return value.map((entry, index) => {

@@ -25,7 +25,16 @@ const VALID = {
 describe('relay config', () => {
     it('parses a valid file with defaults', () => {
         const config = parseRelayConfig(VALID);
-        expect(config).toMatchObject({ host: '0.0.0.0', port: 8790 });
+        expect(config.listen).toEqual({
+            kind: 'tcp',
+            host: '0.0.0.0',
+            port: 8790,
+        });
+        expect(config).toMatchObject({
+            clients: [],
+            maxLiveChannels: 4,
+            vodPolicy: 'refuse',
+        });
         expect(config.channels.map((c) => c.streamId)).toEqual([101, 202]);
         expect(config.tuning).toEqual(DEFAULT_RELAY_TUNING);
         expect(config.userAgent).toBeUndefined();
@@ -54,7 +63,20 @@ describe('relay config', () => {
         [{ ...VALID, password: '' }, 'password'],
         [{ ...VALID, token: 'short' }, 'token'],
         [{ ...VALID, listen: 'nope' }, 'listen'],
-        [{ ...VALID, channels: [] }, 'channels'],
+        [{ ...VALID, channels: {} }, 'channels'],
+        [{ ...VALID, clients: [{ username: 'ab' }] }, 'clients[0].username'],
+        [
+            {
+                ...VALID,
+                username: 'provuser1',
+                clients: [{ username: 'provuser1', password: 'local-pass' }],
+            },
+            'clients[0]',
+        ],
+        [{ ...VALID, vodPolicy: 'sometimes' }, 'vodPolicy'],
+        [{ ...VALID, maxLiveChannels: 0 }, 'maxLiveChannels'],
+        [{ ...VALID, cacheDir: 'relative/dir' }, 'cacheDir'],
+        [{ ...VALID, cache: { xmltvTtlSec: -1 } }, 'cache.xmltvTtlSec'],
         [
             { ...VALID, channels: [{ streamId: 1 }, { streamId: 1 }] },
             'streamId',

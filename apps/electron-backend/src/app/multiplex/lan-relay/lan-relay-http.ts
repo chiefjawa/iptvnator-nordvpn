@@ -1,10 +1,15 @@
 /**
  * HTTP front of the LAN relay.
  *
- * Every path starts with the configured token; anything else is a 404, so
- * the server reveals nothing to a host on the LAN that was not given the
- * playlist link. The playlist points the player at this server only: it
- * never sees the provider, the account or the upstream URL.
+ * Two kinds of paths:
+ *
+ * - Token paths, `/<token>/playlist.m3u|status|live/<id>.ts`, for a plain
+ *   M3U player and for diagnostics (`status` is token-only).
+ * - Xtream paths (`player_api.php`, `xmltv.php`, `get.php`, stream URLs)
+ *   authenticated by the local logins in `clients`.
+ *
+ * Anything else is a 404. The player never sees the provider, the account
+ * or an upstream URL; the relay's address comes from the request's `Host`.
  */
 
 import { timingSafeEqual } from 'node:crypto';
@@ -14,114 +19,108 @@ import {
     Server,
     ServerResponse,
 } from 'node:http';
-import { AddressInfo } from 'node:net';
-import { LanRelay } from './lan-relay';
+import type { RelayApp } from './relay-app';
 import { RelayConfig } from './relay-config';
-import { ClientOutput } from './relay-client';
-import { RelayLogger } from './relay-log';
+import { serveLive } from './relay-live-http';
+import { handleXtream, Origin, send } from './xtream/xtream-http';
 
 const HOST_HEADER = /^(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::\d{1,5})?$/;
 const LIVE_PATH = /^live\/(\d{1,12})\.ts$/;
 
-export function createRelayHttpServer(
-    relay: LanRelay,
-    config: RelayConfig,
-    log?: RelayLogger
-): Server {
+export function createRelayHttpServer(app: RelayApp): Server {
+    const config = app.deps.config;
+    const log = app.deps.log;
     const server = createServer((request, response) => {
-        try {
-            handle(request, response);
-        } catch (error) {
+        handle(request, response).catch((error: unknown) => {
+            app.http.errors += 1;
             log?.warn(`request failed: ${(error as Error)?.name ?? 'Error'}`);
             if (!response.headersSent) {
                 plain(response, 500);
             } else {
                 response.destroy();
             }
-        }
+        });
     });
-    // A live response is endless; only the request itself is timed.
+    // Live and VOD responses are long; only the request itself is timed.
     server.requestTimeout = 30000;
     server.headersTimeout = 15000;
 
-    function handle(request: IncomingMessage, response: ServerResponse): void {
-        const path = (request.url ?? '/').split('?')[0];
-        const [, token, ...rest] = path.split('/');
-        if (!token || !sameToken(token, config.token)) {
-            plain(response, 404);
+    async function handle(
+        request: IncomingMessage,
+        response: ServerResponse
+    ): Promise<void> {
+        const method = request.method ?? 'GET';
+        const url = new URL(request.url ?? '/', 'http://relay.invalid');
+        const path = url.pathname;
+        const [, first, ...rest] = path.split('/');
+        if (first && sameToken(first, config.token)) {
+            if (method !== 'GET' && method !== 'HEAD') {
+                response.writeHead(405, { Allow: 'GET, HEAD' });
+                response.end();
+                return;
+            }
+            tokenRoute(request, response, rest.join('/'));
             return;
         }
-        if (request.method !== 'GET' && request.method !== 'HEAD') {
+        const post = method === 'POST' && path === '/player_api.php';
+        if (method !== 'GET' && method !== 'HEAD' && !post) {
             response.writeHead(405, { Allow: 'GET, HEAD' });
             response.end();
             return;
         }
-        const route = rest.join('/');
+        const origin = originFor(request, config);
+        const handled = await handleXtream(
+            app,
+            request,
+            response,
+            path,
+            url.searchParams,
+            origin
+        );
+        if (!handled) {
+            app.http.notFound += 1;
+            plain(response, 404);
+        }
+    }
+
+    function tokenRoute(
+        request: IncomingMessage,
+        response: ServerResponse,
+        route: string
+    ): void {
+        const headOnly = request.method === 'HEAD';
         if (route === 'playlist.m3u') {
-            const body = playlist(config, hostFor(request, config));
-            send(request, response, 'audio/x-mpegurl; charset=utf-8', body);
+            const body = playlist(app, originFor(request, config).origin);
+            send(
+                response,
+                200,
+                'audio/x-mpegurl; charset=utf-8',
+                body,
+                headOnly
+            );
             return;
         }
         if (route === 'status') {
-            const body = JSON.stringify(relay.status(), null, 2);
-            send(request, response, 'application/json; charset=utf-8', body);
+            const body = JSON.stringify(app.status(), null, 2);
+            send(
+                response,
+                200,
+                'application/json; charset=utf-8',
+                body,
+                headOnly
+            );
             return;
         }
         const live = LIVE_PATH.exec(route);
-        const streamId = live ? Number(live[1]) : NaN;
-        if (!live || !relay.hasChannel(streamId)) {
+        if (!live) {
+            app.http.notFound += 1;
             plain(response, 404);
             return;
         }
-        serveLive(request, response, streamId);
-    }
-
-    function serveLive(
-        request: IncomingMessage,
-        response: ServerResponse,
-        streamId: number
-    ): void {
-        response.writeHead(200, {
-            'Content-Type': 'video/mp2t',
-            'Cache-Control': 'no-store',
-            Connection: 'close',
-        });
-        if (request.method === 'HEAD') {
-            response.end();
-            return;
-        }
-        response.flushHeaders();
-        request.socket.setNoDelay(true);
-        request.socket.setTimeout(0);
-        const output: ClientOutput = {
-            write: (data) => response.write(data),
-            onDrain: (listener) => response.once('drain', listener),
-            close: () => response.end(),
-        };
-        const remote = request.socket.remoteAddress ?? 'unknown';
-        const client = relay.attach(streamId, output, remote);
-        if (!client) {
-            response.end();
-            return;
-        }
-        response.once('close', () => relay.detach(streamId, client));
+        serveLive(app.relay, request, response, Number(live[1]));
     }
 
     return server;
-}
-
-export function listenRelay(
-    server: Server,
-    host: string,
-    port: number
-): Promise<AddressInfo> {
-    return new Promise((resolve, reject) => {
-        server.once('error', reject);
-        server.listen(port, host, () => {
-            server.off('error', reject);
-            resolve(server.address() as AddressInfo);
-        });
-    });
 }
 
 export async function closeRelayServer(server: Server): Promise<void> {
@@ -129,50 +128,50 @@ export async function closeRelayServer(server: Server): Promise<void> {
     await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
-export function playlist(config: RelayConfig, host: string): string {
+/** The token playlist: the configured `channels`, pointing at this relay. */
+export function playlist(app: RelayApp, origin: string): string {
+    const config = app.deps.config;
     const lines = ['#EXTM3U'];
     for (const channel of config.channels) {
         const attribute = channel.name.replace(/"/g, "'");
         lines.push(
             `#EXTINF:-1 tvg-id="${channel.streamId}" tvg-name="${attribute}",${channel.name}`,
-            `http://${host}/${config.token}/live/${channel.streamId}.ts`
+            `${origin}/${config.token}/live/${channel.streamId}.ts`
         );
     }
     return `${lines.join('\n')}\n`;
 }
 
-/** The address the player used, so the playlist links work from its side. */
-function hostFor(request: IncomingMessage, config: RelayConfig): string {
+/** The address the player used, so links work from its side. */
+function originFor(request: IncomingMessage, config: RelayConfig): Origin {
     const header = request.headers.host?.trim();
+    let hostPort: string;
     if (header && HOST_HEADER.test(header)) {
-        return header;
+        hostPort = header;
+    } else {
+        const listen = config.listen;
+        const local = request.socket.localAddress;
+        const wildcard =
+            listen.kind !== 'tcp' ||
+            listen.host === '0.0.0.0' ||
+            listen.host === '::';
+        const address = wildcard ? (local ?? '127.0.0.1') : listen.host;
+        const port =
+            request.socket.localPort ??
+            (listen.kind === 'tcp' ? listen.port : 80);
+        const bracketed = address.includes(':') ? `[${address}]` : address;
+        hostPort = `${bracketed}:${port}`;
     }
-    const local = request.socket.localAddress;
-    const address =
-        config.host === '0.0.0.0' || config.host === '::'
-            ? (local ?? '127.0.0.1')
-            : config.host;
-    return `${address.includes(':') ? `[${address}]` : address}:${config.port}`;
+    const host = hostPort.startsWith('[')
+        ? hostPort.slice(0, hostPort.indexOf(']') + 1)
+        : hostPort.split(':')[0];
+    return { origin: `http://${hostPort}`, host };
 }
 
 function sameToken(given: string, expected: string): boolean {
     const a = Buffer.from(given);
     const b = Buffer.from(expected);
     return a.length === b.length && timingSafeEqual(a, b);
-}
-
-function send(
-    request: IncomingMessage,
-    response: ServerResponse,
-    type: string,
-    body: string
-): void {
-    response.writeHead(200, {
-        'Content-Type': type,
-        'Content-Length': Buffer.byteLength(body),
-        'Cache-Control': 'no-store',
-    });
-    response.end(request.method === 'HEAD' ? undefined : body);
 }
 
 function plain(response: ServerResponse, status: number): void {

@@ -59,6 +59,7 @@ export class GroupScheduler {
     private readonly config: SchedulerConfig;
     private running: Promise<void> | null = null;
     private stopped = false;
+    private suspended = false;
     private current: { tile: Tile; abort: AbortController } | null = null;
     private minGapMs: number;
     private lastCloseAtMs = Number.NEGATIVE_INFINITY;
@@ -102,6 +103,30 @@ export class GroupScheduler {
         this.tiles.get(id)?.reserve.noteReport(progress, this.clock.now());
     }
 
+    get isSuspended(): boolean {
+        return this.suspended;
+    }
+
+    /**
+     * Ends the current visit and opens nothing until `resume()`; resolves
+     * once the connection is closed. Tiles keep their splicers, so the next
+     * visit after resuming is stitched on like any revisit.
+     */
+    async suspend(): Promise<void> {
+        this.suspended = true;
+        this.current?.abort.abort();
+        while (this.current) {
+            await this.clock.sleep(this.config.tickMs / 5);
+        }
+    }
+
+    resume(): void {
+        this.suspended = false;
+        if (!this.stopped && !this.running && this.tiles.size > 0) {
+            this.running = this.run();
+        }
+    }
+
     /** Closes the connection and stops rotating. */
     async stop(): Promise<void> {
         this.stopped = true;
@@ -142,6 +167,10 @@ export class GroupScheduler {
 
     private async run(): Promise<void> {
         while (!this.stopped && this.tiles.size > 0) {
+            if (this.suspended) {
+                await this.clock.sleep(this.config.tickMs);
+                continue;
+            }
             const tile = this.pickNext();
             const gapLeft =
                 this.lastCloseAtMs + this.minGapMs - this.clock.now();
