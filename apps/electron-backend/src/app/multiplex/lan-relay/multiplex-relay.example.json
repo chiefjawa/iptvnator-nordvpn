@@ -1,0 +1,12 @@
+{
+    "serverUrl": "http://provider.example.test:8080",
+    "username": "example-user",
+    "password": "example-password",
+    "listen": "0.0.0.0:8790",
+    "token": "replace-with-a-long-random-token-0123456789",
+    "channels": [
+        { "streamId": 1001, "name": "Example Channel A" },
+        { "streamId": 1002, "name": "Example Channel B" }
+    ],
+    "userAgent": "VLC/3.0.18 LibVLC/3.0.18"
+}

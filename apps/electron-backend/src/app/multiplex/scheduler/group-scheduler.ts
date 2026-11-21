@@ -7,7 +7,7 @@
  * refusal is answered by waiting longer, never by opening a second one.
  */
 
-import { TileSplicer } from '../splicer/tile-splicer';
+import { TileSplicer, VisitSummary } from '../splicer/tile-splicer';
 import { TileReserve } from './reserve-model';
 import {
     DEFAULT_SCHEDULER_CONFIG,
@@ -45,6 +45,8 @@ export interface GroupSchedulerDeps {
     readonly clock?: MultiplexClock;
     readonly config?: Partial<SchedulerConfig>;
     readonly onStatus?: (tiles: TileStatus[]) => void;
+    /** Called when a visit that received data ends, with its splice totals. */
+    readonly onVisitEnd?: (tileId: string, summary: VisitSummary) => void;
 }
 
 const MAX_GAP_MS = 2000;
@@ -193,7 +195,9 @@ export class GroupScheduler {
             tile.splicer.beginVisit();
             const meter = new VisitMeter(this.clock, this.config.rateWindowMs);
             end = await this.pump(tile, handle, abort.signal, meter);
-            tile.skippedMs = tile.splicer.endVisit().skippedMs;
+            const summary = tile.splicer.endVisit();
+            tile.skippedMs = summary.skippedMs;
+            this.deps.onVisitEnd?.(tile.id, summary);
             receivedAny = meter.receivedMediaMs > 0;
         }
 
@@ -261,7 +265,7 @@ export class GroupScheduler {
                 }
                 const result = tile.splicer.push(chunk);
                 if (result.output.length > 0) {
-                    tile.sink.write(result.output);
+                    tile.sink.write(result.output, result.forwardedMs);
                 }
                 tile.reserve.noteForwarded(
                     result.forwardedMs,

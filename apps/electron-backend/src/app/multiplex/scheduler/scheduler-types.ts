@@ -39,7 +39,8 @@ export type OpenUpstream = (
 
 /** Where a tile's stitched stream goes (the relay response). */
 export interface TileSink {
-    write(packets: Buffer[]): void;
+    /** `mediaMs` is the media duration of `packets` (whole segments). */
+    write(packets: Buffer[], mediaMs?: number): void;
 }
 
 export interface TileProgress {

@@ -19,6 +19,13 @@
                 "command": "node apps/electron-backend/build-worker.js --performance"
             }
         },
+        "build-multiplex-relay": {
+            "executor": "nx:run-commands",
+            "outputs": ["{workspaceRoot}/dist/apps/multiplex-relay"],
+            "options": {
+                "command": "node apps/electron-backend/build-multiplex-relay.js"
+            }
+        },
         "build-embedded-mpv": {
             "executor": "nx:run-commands",
             "cache": false,

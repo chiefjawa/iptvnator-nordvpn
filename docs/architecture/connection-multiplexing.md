@@ -98,3 +98,50 @@ it like a real deep-burst provider (25 s at 12x, 1 s open, 2 s GOPs, burst
 starting on the keyframe after the depth) and require every revisit in the
 first minute to overlap by at least one GOP, for two to four tiles. There is no Electron E2E yet;
 the feature was validated over CDP against a real provider.
+
+## Standalone LAN relay (trial)
+
+`multiplex/lan-relay/` is a plain-Node program built from the same engine
+(`pnpm nx run electron-backend:build-multiplex-relay`, then
+`node dist/apps/multiplex-relay/main.js --config <file>`; see its README).
+It serves configured channels to players on the home network that cannot
+report their buffer, such as ExoPlayer-based TV apps, through one provider
+connection. It lives in the `electron-backend` project because Nx does not
+let one app import another, and the engine has no Electron imports; the
+bundle fails to build if `electron` is ever pulled in.
+
+- **One group.** Every configured channel is a tile of one
+  `GroupScheduler`, with the invariants above unchanged. The relay's opener
+  also counts open connections and refuses to open a second one itself.
+- **The relay holds the reserve.** Each tile's spliced output is queued as
+  whole segments (PAT, PMT, keyframe onward). The reserve reported to the
+  scheduler, every 500 ms, is the slowest client's queued-but-unsent media
+  plus its estimated player cushion; a tile with no clients reports its
+  queue length without draining.
+- **Paced output.** A client gets `fastStartSec` (3 s) at once, then media
+  at real time, at `overdrive` (1.02) while its estimated cushion is under
+  `targetCushionSec` (6 s). After a dry spell at most one fast start is
+  sent at once.
+- **Keep-alive.** With nothing to send, 4 null packets (PID 0x1FFF) go out
+  after every 300 ms of silence, so the socket never goes quiet; dry spells
+  are counted.
+- **Backpressure and memory.** A client whose socket is full is paused (not
+  even keep-alive is written) until it drains. Queues are capped at 120 s or
+  64 MB per channel and 256 MB together; the oldest segment is dropped, and
+  a client still on it skips ahead to the next segment start (a
+  `backpressureDrop`).
+- **Clients.** The first request for a stream id creates its tile; more
+  clients for it share the queue. A client joining a running tile, or
+  reconnecting within the 8 s grace period after the last one left, starts
+  on the segment `joinBacklogSec` (3 s) before the queue's end. After the
+  grace the tile is removed.
+
+Limits: the cushion is an estimate (the relay cannot see the player); a
+joiner starts with only `joinBacklogSec` of relay-side reserve, so the
+scheduler serves it next; a skip over dropped media is a timestamp and
+continuity jump the player must absorb; there is no transcoding, HLS or
+catch-up. Validated with synthetic specs (`lan-relay*.spec.ts`: two and
+three channels on the deep-burst fake provider, fan-out, grace, backpressure,
+memory cap, secret-free logs, real-socket HTTP) and with ffmpeg on real
+H.264/AAC served through a file-backed fake provider; not yet on a real
+player.
